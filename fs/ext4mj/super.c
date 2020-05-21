@@ -893,11 +893,15 @@ static void ext4mj_put_super(struct super_block *sb)
 	destroy_workqueue(sbi->rsv_conversion_wq);
 
 	if (sbi->s_journal) {
-		aborted = is_journal_aborted(sbi->s_journal);
-		err = zj_journal_destroy(sbi->s_journal);
-		sbi->s_journal = NULL;
-		if ((err < 0) && !aborted)
-			ext4mj_abort(sb, "Couldn't clean up the journal");
+		for(i = 0; i < sbi->s_num_journals; i++) {
+			if (sbi->_s_journal[i]) {
+				aborted = is_journal_aborted(sbi->_s_journal[i]);
+				err = zj_journal_destroy(sbi->_s_journal[i]);
+				sbi->_s_journal[i] = NULL;
+				if ((err < 0) && !aborted)
+					ext4mj_abort(sb, "Couldn't clean up the journal");
+			}
+		}
 	}
 
 	ext4mj_unregister_sysfs(sb);
@@ -3489,7 +3493,6 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 	if ((data && !orig_data) || !sbi)
 		goto out_free_base;
 
-	printk(KERN_ERR "fill test 1\n");
 	sbi->s_daxdev = dax_dev;
 	sbi->s_blockgroup_lock =
 		kzalloc(sizeof(struct blockgroup_lock), GFP_KERNEL);
@@ -3515,7 +3518,6 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 		goto out_fail;
 	}
 
-	printk(KERN_ERR "fill test 2\n");
 	/*
 	 * The ext4mj superblock will not be buffer aligned for other than 1kB
 	 * block sizes.  We need to calculate the offset from buffer start.
@@ -3541,7 +3543,6 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 	if (sb->s_magic != EXT4_SUPER_MAGIC)
 		goto cantfind_ext4mj;
 	sbi->s_kbytes_written = le64_to_cpu(es->s_kbytes_written);
-	printk(KERN_ERR "fill test 3\n");
 
 	/* Warn if metadata_csum and gdt_csum are both set. */
 	if (ext4mj_has_feature_metadata_csum(sb) &&
@@ -3557,7 +3558,6 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 		goto cantfind_ext4mj;
 	}
 
-	printk(KERN_ERR "fill test 4\n");
 	/* Load the checksum driver */
 	sbi->s_chksum_driver = crypto_alloc_shash("crc32c", 0, 0);
 	if (IS_ERR(sbi->s_chksum_driver)) {
@@ -3583,7 +3583,6 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 		sbi->s_csum_seed = ext4mj_chksum(sbi, ~0, es->s_uuid,
 					       sizeof(es->s_uuid));
 
-	printk(KERN_ERR "fill test 5\n");
 	/* Set defaults before we parse the mount options */
 	def_mount_opts = le32_to_cpu(es->s_default_mount_opts);
 	set_opt(sb, INIT_INODE_TABLE);
@@ -3620,7 +3619,6 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 	if (def_mount_opts & EXT4MJ_DEFM_DISCARD)
 		set_opt(sb, DISCARD);
 
-	printk(KERN_ERR "fill test 6\n");
 	sbi->s_resuid = make_kuid(&init_user_ns, le16_to_cpu(es->s_def_resuid));
 	sbi->s_resgid = make_kgid(&init_user_ns, le16_to_cpu(es->s_def_resgid));
 	sbi->s_commit_interval = ZJ_DEFAULT_MAX_COMMIT_AGE * HZ;
@@ -3723,7 +3721,6 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 		}
 	}
 
-	printk(KERN_ERR "fill test 7\n");
 	if (IS_EXT2_SB(sb)) {
 		if (ext2_feature_set_ok(sb))
 			ext4mj_msg(sb, KERN_INFO, "mounting ext2 file system "
@@ -3758,7 +3755,6 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 		}
 	}
 
-	printk(KERN_ERR "fill test 8\n");
 	/*
 	 * Check feature flags regardless of the revision level, since we
 	 * previously didn't change the revision level when setting the flags,
@@ -3838,7 +3834,6 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 			goto failed_mount;
 		}
 	}
-	printk(KERN_ERR "fill test 9\n");
 
 	has_huge_files = ext4mj_has_feature_huge_file(sb);
 	sbi->s_bitmap_maxbytes = ext4mj_max_bitmap_size(sb->s_blocksize_bits,
@@ -3884,7 +3879,6 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 	sbi->s_blocks_per_group = le32_to_cpu(es->s_blocks_per_group);
 	sbi->s_inodes_per_group = le32_to_cpu(es->s_inodes_per_group);
 
-	printk(KERN_ERR "fill test 10\n");
 	sbi->s_inodes_per_block = blocksize / EXT4MJ_INODE_SIZE(sb);
 	if (sbi->s_inodes_per_block == 0)
 		goto cantfind_ext4mj;
@@ -3990,7 +3984,6 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 	if (EXT4MJ_BLOCKS_PER_GROUP(sb) == 0)
 		goto cantfind_ext4mj;
 
-	printk(KERN_ERR "fill test 11\n");
 	/* check blocks count against device size */
 	blocks_count = sb->s_bdev->bd_inode->i_size >> sb->s_blocksize_bits;
 	if (blocks_count && ext4mj_blocks_count(es) > blocks_count) {
@@ -4097,7 +4090,6 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 	if (ext4mj_es_register_shrinker(sbi))
 		goto failed_mount3;
 
-	printk(KERN_ERR "fill test 12\n");
 	sbi->s_stripe = ext4mj_get_stripe_size(sbi);
 	sbi->s_extent_max_zeroout_kb = 32;
 
@@ -4246,7 +4238,6 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 	}
 
 
-	printk(KERN_ERR "fill test 13\n");
 no_journal:
 	if (!test_opt(sb, NO_MBCACHE)) {
 		sbi->s_ea_block_cache = ext4mj_xattr_create_cache();
@@ -4371,7 +4362,6 @@ no_journal:
 			 err);
 		goto failed_mount5;
 	}
-	printk(KERN_ERR "fill test 14\n");
 
 	block = ext4mj_count_free_clusters(sb);
 	ext4mj_free_blocks_count_set(sbi->s_es, 
@@ -4465,7 +4455,6 @@ no_journal:
 	ratelimit_state_init(&sbi->s_warning_ratelimit_state, 5 * HZ, 10);
 	ratelimit_state_init(&sbi->s_msg_ratelimit_state, 5 * HZ, 10);
 
-	printk(KERN_ERR "fill test 15\n");
 	kfree(orig_data);
 	return 0;
 
@@ -4476,14 +4465,11 @@ cantfind_ext4mj:
 
 #ifdef CONFIG_QUOTA
 failed_mount8:
-	printk(KERN_ERR "fill test 16\n");
 	ext4mj_unregister_sysfs(sb);
 #endif
 failed_mount7:
-	printk(KERN_ERR "fill test 17\n");
 	ext4mj_unregister_li_request(sb);
 failed_mount6:
-	printk(KERN_ERR "fill test 18\n");
 	ext4mj_mb_release(sb);
 	if (sbi->s_flex_groups)
 		kvfree(sbi->s_flex_groups);
@@ -4492,15 +4478,12 @@ failed_mount6:
 	percpu_counter_destroy(&sbi->s_dirs_counter);
 	percpu_counter_destroy(&sbi->s_dirtyclusters_counter);
 failed_mount5:
-	printk(KERN_ERR "fill test 19\n");
 	ext4mj_ext_release(sb);
 	ext4mj_release_system_zone(sb);
 failed_mount4a:
-	printk(KERN_ERR "fill test 20\n");
 	dput(sb->s_root);
 	sb->s_root = NULL;
 failed_mount4:
-	printk(KERN_ERR "fill test 21\n");
 	ext4mj_msg(sb, KERN_ERR, "mount failed");
 	if (EXT4MJ_SB(sb)->rsv_conversion_wq)
 		destroy_workqueue(EXT4MJ_SB(sb)->rsv_conversion_wq);
@@ -4521,20 +4504,16 @@ failed_mount_wq:
 		}
 	}
 failed_mount3a:
-	printk(KERN_ERR "fill test 22\n");
 	ext4mj_es_unregister_shrinker(sbi);
 failed_mount3:
-	printk(KERN_ERR "fill test 23\n");
 	del_timer_sync(&sbi->s_err_report);
 	if (sbi->s_mmp_tsk)
 		kthread_stop(sbi->s_mmp_tsk);
 failed_mount2:
-	printk(KERN_ERR "fill test 24\n");
 	for (i = 0; i < db_count; i++)
 		brelse(sbi->s_group_desc[i]);
 	kvfree(sbi->s_group_desc);
 failed_mount:
-	printk(KERN_ERR "fill test 25\n");
 	if (sbi->s_chksum_driver)
 		crypto_free_shash(sbi->s_chksum_driver);
 #ifdef CONFIG_QUOTA

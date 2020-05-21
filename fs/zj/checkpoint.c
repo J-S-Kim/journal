@@ -264,6 +264,7 @@ restart:
 		}
 		if (jh->b_transaction != NULL) {
 			ztransaction_t *t = jh->b_transaction;
+			zjournal_t *jjournal = t->t_journal;
 			tid_t tid = t->t_tid;
 
 			transaction->t_chp_stats.cs_forced_to_close++;
@@ -279,8 +280,8 @@ restart:
 		"ZJ: %s: Waiting for Godot: block %llu\n",
 		journal->j_devname, (unsigned long long) bh->b_blocknr);
 
-			zj_log_start_commit(journal, tid);
-			zj_log_wait_commit(journal, tid);
+			zj_log_start_commit(jjournal, tid);
+			zj_log_wait_commit(jjournal, tid);
 			goto retry;
 		}
 		if (!buffer_dirty(bh)) {
@@ -652,6 +653,8 @@ void __zj_journal_drop_transaction(zjournal_t *journal, ztransaction_t *transact
 		if (journal->j_checkpoint_transactions == transaction)
 			journal->j_checkpoint_transactions = NULL;
 	}
+
+	free_percpu(transaction->t_commit_list);
 
 	J_ASSERT(transaction->t_state == T_FINISHED);
 	J_ASSERT(transaction->t_buffers == NULL);

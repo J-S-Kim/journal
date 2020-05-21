@@ -2924,13 +2924,13 @@ retry:
 			ext4mj_put_io_end(mpd.io_submit.io_end);
 		mpd.io_submit.io_end = NULL;
 
-		if (ret == -ENOSPC && sbi->s_journal) {
+		if (ret == -ENOSPC && ext4mj_get_zjournal_sbi(sbi, smp_processor_id())) {
 			/*
 			 * Commit the transaction which would
 			 * free blocks released in the transaction
 			 * and try again
 			 */
-			zj_journal_force_commit_nested(sbi->s_journal);
+			zj_journal_force_commit_nested(ext4mj_get_zjournal_sbi(sbi, smp_processor_id()));
 			ret = 0;
 			continue;
 		}
@@ -5292,12 +5292,13 @@ static void ext4mj_wait_for_tail_page_commit(struct inode *inode)
 		if (ret != -EBUSY)
 			return;
 		commit_tid = 0;
-		read_lock(&journal->j_state_lock);
-		if (journal->j_committing_transaction)
-			commit_tid = journal->j_committing_transaction->t_tid;
-		read_unlock(&journal->j_state_lock);
-		if (commit_tid)
-			zj_log_wait_commit(journal, commit_tid);
+		//TODO
+		/*read_lock(&journal->j_state_lock);*/
+		/*if (journal->j_committing_transaction)*/
+			/*commit_tid = journal->j_committing_transaction->t_tid;*/
+		/*read_unlock(&journal->j_state_lock);*/
+		/*if (commit_tid)*/
+			/*zj_log_wait_commit(journal, commit_tid);*/
 	}
 }
 
