@@ -123,8 +123,11 @@ static int journal_submit_commit_record(zjournal_t *journal,
 {
 	struct commit_header *tmp;
 	struct buffer_head *bh;
-	int ret;
+	int ret, cpu;
+	int tag_bytes = sizeof(commit_block_tag_t);
 	struct timespec64 now = current_kernel_time64();
+	char *tagp = NULL;
+	commit_block_tag_t *tag;
 
 	*cbh = NULL;
 
@@ -145,6 +148,26 @@ static int journal_submit_commit_record(zjournal_t *journal,
 		tmp->h_chksum_size 	= ZJ_CRC32_CHKSUM_SIZE;
 		tmp->h_chksum[0] 	= cpu_to_be32(crc32_sum);
 	}
+
+	tagp = &bh->b_data[sizeof(struct commit_header)];
+
+	/*printk(KERN_ERR "%d, %d\n", journal->j_core_id, commit_transaction->t_tid);*/
+	for_each_possible_cpu(cpu) {
+		struct list_head *rc = per_cpu_ptr(commit_transaction->t_commit_list, cpu);
+		while (!list_empty(rc)) {
+			tag = (commit_block_tag_t *) tagp;
+			commit_entry_t *tc = list_entry(rc->next, commit_entry_t, pos);
+			tag->core = cpu_to_be16(tc->core & (u16)~0);
+			tag->tid = cpu_to_be32(tc->tid & (u32)~0);
+			/*printk(KERN_ERR "   %d,%d  //  %d,%d\n", tag->core, tag->tid, tc->core, tc->tid);*/
+			tagp += tag_bytes;
+			list_del(&tc->pos);
+			zj_free_commit(tc);
+		}
+	}
+	tag = (commit_block_tag_t *) tagp;
+	tag->core = cpu_to_be16(0 & (u16)~0);
+	tag->tid = cpu_to_be32(0 & (u32)~0);
 	zj_commit_block_csum_set(journal, bh);
 
 	BUFFER_TRACE(bh, "submit commit block");
@@ -154,7 +177,7 @@ static int journal_submit_commit_record(zjournal_t *journal,
 	bh->b_end_io = journal_end_buffer_io_sync;
 
 	if (journal->j_flags & ZJ_BARRIER &&
-	    !zj_has_feature_async_commit(journal))
+			!zj_has_feature_async_commit(journal))
 		ret = submit_bh(REQ_OP_WRITE,
 			REQ_SYNC | REQ_PREFLUSH | REQ_FUA, bh);
 	else
@@ -361,7 +384,7 @@ void zj_journal_commit_transaction(zjournal_t *journal)
 	int space_left = 0;
 	int first_tag = 0;
 	int tag_flag;
-	int i;
+	int i, cpu;
 	int tag_bytes = zjournal_tag_bytes(journal);
 	struct buffer_head *cbh = NULL; /* For transactional checksums */
 	__u32 crc32_sum = ~0;
@@ -552,9 +575,22 @@ void zj_journal_commit_transaction(zjournal_t *journal)
 		atomic_read(&commit_transaction->t_outstanding_credits);
 	stats.run.rs_blocks_logged = 0;
 
+	/*printk(KERN_ERR "journal: %d, tid:%d, %d, %d\n", journal->j_core_id, commit_transaction->t_tid, commit_transaction->t_nr_buffers, atomic_read(&commit_transaction->t_outstanding_credits));*/
 	J_ASSERT(commit_transaction->t_nr_buffers <=
 		 atomic_read(&commit_transaction->t_outstanding_credits));
 
+	while (atomic_read(&commit_transaction->t_nexts)) {
+		DEFINE_WAIT(wait);
+
+		prepare_to_wait(&journal->j_wait_nexts, &wait,
+					TASK_UNINTERRUPTIBLE);
+		if (atomic_read(&commit_transaction->t_nexts)) {
+			/*printk(KERN_ERR "Wait next journal: %d, tid: %d, nexts: %d\n", journal->j_core_id, commit_transaction->t_tid, atomic_read(&commit_transaction->t_nexts));*/
+			schedule();
+			/*printk(KERN_ERR "Wait next journal: %d, tid: %d, nexts: %d end\n", journal->j_core_id, commit_transaction->t_tid, atomic_read(&commit_transaction->t_nexts));*/
+		}
+		finish_wait(&journal->j_wait_nexts, &wait);
+	}
 	err = 0;
 	bufs = 0;
 	descriptor = NULL;
@@ -902,6 +938,7 @@ restart_loop:
 	spin_lock(&journal->j_list_lock);
 	while (commit_transaction->t_forget) {
 		ztransaction_t *cp_transaction;
+		zjournal_t *cp_journal;
 		struct buffer_head *bh;
 		int try_to_free = 0;
 
@@ -946,9 +983,18 @@ restart_loop:
 		spin_lock(&journal->j_list_lock);
 		cp_transaction = jh->b_cp_transaction;
 		if (cp_transaction) {
+			cp_journal = cp_transaction->t_journal;
 			JBUFFER_TRACE(jh, "remove from old cp transaction");
 			cp_transaction->t_chp_stats.cs_dropped++;
+			if (journal != cp_journal) {
+				spin_unlock(&journal->j_list_lock);
+				spin_lock(&cp_journal->j_list_lock);
+			}
 			__zj_journal_remove_checkpoint(jh);
+			if (journal != cp_journal) {
+				spin_unlock(&cp_journal->j_list_lock);
+				spin_lock(&journal->j_list_lock);
+			}
 		}
 
 		/* Only re-checkpoint the buffer_head if it is marked

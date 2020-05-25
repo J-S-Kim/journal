@@ -271,6 +271,7 @@ move_extent_per_page(struct file *o_filp, struct inode *donor_inode,
 	int blocks_per_page = PAGE_SIZE >> orig_inode->i_blkbits;
 	struct super_block *sb = orig_inode->i_sb;
 	struct buffer_head *bh = NULL;
+	zjournal_t *journal;
 
 	/*
 	 * It needs twice the amount of ordinary journal buffers because
@@ -414,8 +415,9 @@ stop_journal:
 		goto again;
 	/* Buffer was busy because probably is pinned to journal transaction,
 	 * force transaction commit may help to free it. */
-	if (*err == -EBUSY && retries++ < 4 && EXT4MJ_SB(sb)->s_journal &&
-	    zj_journal_force_commit_nested(EXT4MJ_SB(sb)->s_journal))
+	journal = ext4mj_get_zjournal_sbi(EXT4MJ_SB(sb), smp_processor_id());
+	if (*err == -EBUSY && retries++ < 4 && journal &&
+	    zj_journal_force_commit_nested(journal))
 		goto again;
 	return replaced_count;
 

@@ -45,6 +45,7 @@
 #include <linux/compat.h>
 #endif
 
+#define PER_GROUP_ALLOC
 /*
  * The fourth extended filesystem constants/structures
  */

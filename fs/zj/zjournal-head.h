@@ -29,6 +29,7 @@ struct zjournal_head {
 	 */
 	int b_jcount;
 
+    struct zj_journal_handle *modified_handle;
 	/*
 	 * Journalling list for this buffer [jbd_lock_bh_state()]
 	 * NOTE: We *cannot* combine this with b_modified into a bitfield
