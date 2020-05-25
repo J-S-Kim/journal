@@ -101,6 +101,7 @@ EXPORT_SYMBOL(zj_journal_init_jbd_inode);
 EXPORT_SYMBOL(zj_journal_release_jbd_inode);
 EXPORT_SYMBOL(zj_journal_begin_ordered_truncate);
 EXPORT_SYMBOL(zj_inode_cache);
+EXPORT_SYMBOL(zj_commit_cache);
 
 static void __journal_abort_soft (zjournal_t *journal, int errno);
 static int zj_journal_create_slab(size_t slab_size);
@@ -1138,6 +1139,7 @@ static zjournal_t *journal_init_common(struct block_device *bdev,
 	init_waitqueue_head(&journal->j_wait_done_commit);
 	init_waitqueue_head(&journal->j_wait_commit);
 	init_waitqueue_head(&journal->j_wait_updates);
+	init_waitqueue_head(&journal->j_wait_nexts);
 	init_waitqueue_head(&journal->j_wait_reserved);
 	mutex_init(&journal->j_barrier);
 	mutex_init(&journal->j_checkpoint_mutex);
@@ -2640,6 +2642,7 @@ static void __exit zj_remove_jbd_stats_proc_entry(void)
 #endif
 
 struct kmem_cache *zj_handle_cache, *zj_inode_cache;
+struct kmem_cache *zj_commit_cache;
 
 static int __init zj_journal_init_handle_cache(void)
 {
@@ -2654,6 +2657,13 @@ static int __init zj_journal_init_handle_cache(void)
 		kmem_cache_destroy(zj_handle_cache);
 		return -ENOMEM;
 	}
+	zj_commit_cache = KMEM_CACHE(commit_entry_s, 0);
+	if (zj_commit_cache == NULL) {
+		printk(KERN_EMERG "ZJ: failed to create commit cache\n");
+		kmem_cache_destroy(zj_handle_cache);
+		kmem_cache_destroy(zj_inode_cache);
+		return -ENOMEM;
+	}
 	return 0;
 }
 
@@ -2663,6 +2673,8 @@ static void zj_journal_destroy_handle_cache(void)
 		kmem_cache_destroy(zj_handle_cache);
 	if (zj_inode_cache)
 		kmem_cache_destroy(zj_inode_cache);
+	if (zj_commit_cache)
+		kmem_cache_destroy(zj_commit_cache);
 
 }
 

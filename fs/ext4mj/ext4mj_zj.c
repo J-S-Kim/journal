@@ -51,7 +51,7 @@ static int ext4mj_journal_check_start(struct super_block *sb)
 	if (sb_rdonly(sb))
 		return -EROFS;
 	WARN_ON(sb->s_writers.frozen == SB_FREEZE_COMPLETE);
-	journal = EXT4MJ_SB(sb)->s_journal;
+	journal = ext4mj_get_zjournal_sbi(EXT4MJ_SB(sb), smp_processor_id());
 	/*
 	 * Special case here: if the journal has aborted behind our
 	 * backs (eg. EIO in the commit thread), then we still need to
@@ -75,7 +75,7 @@ handle_t *__ext4mj_journal_start_sb(struct super_block *sb, unsigned int line,
 	if (err < 0)
 		return ERR_PTR(err);
 
-	journal = EXT4MJ_SB(sb)->s_journal;
+	journal = ext4mj_get_zjournal_sbi(EXT4MJ_SB(sb), smp_processor_id());
 	if (!journal)
 		return ext4mj_get_nojournal();
 	return zj__journal_start(journal, blocks, rsv_blocks, GFP_NOFS,

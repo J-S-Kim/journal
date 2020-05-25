@@ -31,6 +31,7 @@
 #include <linux/slab.h>
 #include <linux/bit_spinlock.h>
 #include <crypto/hash.h>
+#include <linux/percpu.h>
 #endif
 
 #define journal_oom_retry 1
@@ -183,6 +184,11 @@ typedef struct commit_block_tag_s {
     __be32		tid;
 } commit_block_tag_t;
 
+typedef struct commit_entry_s {
+    __u16		core;
+    __u32		tid;
+    struct list_head pos;
+} commit_entry_t;
 /*
  * The block tag: used to describe a single buffer in the journal.
  * t_blocknr_high is only used if INCOMPAT_64BIT is set, so this
@@ -640,6 +646,7 @@ struct ztransaction_s
 	 */
 	struct list_head	t_inode_list;
 
+    struct list_head  *t_commit_list;
 	/*
 	 * Protects info related to handles
 	 */
@@ -670,6 +677,8 @@ struct ztransaction_s
 	 * [t_handle_lock]
 	 */
 	atomic_t		t_updates;
+
+	atomic_t		t_nexts;
 
 	/*
 	 * Number of buffers reserved for use by all handles in this transaction
@@ -845,6 +854,7 @@ struct zjournal_s
 	 */
 	wait_queue_head_t	j_wait_updates;
 
+	wait_queue_head_t	j_wait_nexts;
 	/**
 	 * @j_wait_reserved:
 	 *
@@ -1449,6 +1459,17 @@ static inline void zj_free_inode(struct zj_inode *jinode)
 	kmem_cache_free(zj_inode_cache, jinode);
 }
 
+extern struct kmem_cache *zj_commit_cache;
+
+static inline commit_entry_t *zj_alloc_commit(gfp_t gfp_flags)
+{
+	return kmem_cache_alloc(zj_commit_cache, gfp_flags);
+}
+
+static inline void zj_free_commit(commit_entry_t *rc)
+{
+	kmem_cache_free(zj_commit_cache, rc);
+}
 /* Primary revoke support */
 #define JOURNAL_REVOKE_DEFAULT_HASH 256
 extern int	   zj_journal_init_revoke(zjournal_t *, int);
