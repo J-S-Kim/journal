@@ -128,6 +128,7 @@ static int journal_submit_commit_record(zjournal_t *journal,
 	struct timespec64 now = current_kernel_time64();
 	char *tagp = NULL;
 	commit_block_tag_t *tag;
+	int count = 0;
 
 	*cbh = NULL;
 
@@ -154,17 +155,21 @@ static int journal_submit_commit_record(zjournal_t *journal,
 	/*printk(KERN_ERR "%d, %d\n", journal->j_core_id, commit_transaction->t_tid);*/
 	for_each_possible_cpu(cpu) {
 		struct list_head *rc = per_cpu_ptr(commit_transaction->t_commit_list, cpu);
-		while (!list_empty(rc)) {
+		commit_entry_t *tc;
+
+		list_for_each_entry(tc, rc, pos) {
+		/*while (!list_empty(rc)) {*/
 			tag = (commit_block_tag_t *) tagp;
-			commit_entry_t *tc = list_entry(rc->next, commit_entry_t, pos);
 			tag->core = cpu_to_be16(tc->core & (u16)~0);
 			tag->tid = cpu_to_be32(tc->tid & (u32)~0);
 			/*printk(KERN_ERR "   %d,%d  //  %d,%d\n", tag->core, tag->tid, tc->core, tc->tid);*/
 			tagp += tag_bytes;
-			list_del(&tc->pos);
-			zj_free_commit(tc);
+			/*list_del(&tc->pos);*/
+			/*zj_free_commit(tc);*/
+			count++;
 		}
 	}
+	/*printk(KERN_ERR "commit mark submit %d\n", count);*/
 	tag = (commit_block_tag_t *) tagp;
 	tag->core = cpu_to_be16(0 & (u16)~0);
 	tag->tid = cpu_to_be32(0 & (u32)~0);
@@ -502,6 +507,8 @@ void zj_journal_commit_transaction(zjournal_t *journal)
 		zj_journal_refile_buffer(journal, jh);
 	}
 
+	write_unlock(&journal->j_state_lock);
+
 	/*
 	 * Now try to drop any written-back buffers from the journal's
 	 * checkpoint lists.  We do this *before* commit because it potentially
@@ -511,6 +518,7 @@ void zj_journal_commit_transaction(zjournal_t *journal)
 	__zj_journal_clean_checkpoint_list(journal, false);
 	spin_unlock(&journal->j_list_lock);
 
+	write_lock(&journal->j_state_lock);
 	jbd_debug(3, "ZJ: commit phase 1\n");
 
 	/*
@@ -900,6 +908,39 @@ start_journal_io:
 		if (err)
 			__zj_journal_abort_hard(journal);
 	}
+
+	// per core list에서 mark 들을 중복 제거한 뒤
+	// check mark list 로 옮겨준다. 옮겨보니 해당 리스트에 마크가 하나도 없으면
+	// real_commit을 체크해준다.
+	int count = 0;
+	spin_lock(&commit_transaction->t_mark_lock);
+	for_each_possible_cpu(cpu) {
+		struct list_head *rc = per_cpu_ptr(commit_transaction->t_commit_list, cpu);
+
+		while (!list_empty(rc)) {
+			commit_entry_t *tc = list_entry(rc->next, commit_entry_t, pos);
+
+			list_del(&tc->pos);
+			if (zj_check_mark_in_list(&commit_transaction->t_check_mark_list, tc)) {
+				/*printk(KERN_ERR "free %d, %d!!\n", tc->core, tc->tid);*/
+				zj_free_commit(tc);
+				continue;
+			}
+			list_add(&tc->pos, &commit_transaction->t_check_mark_list); 
+			/*printk(KERN_ERR "mark %d/%d!!%d, %d!!\n", journal->j_core_id, commit_transaction->t_tid,  tc->core, tc->tid);*/
+			count++;
+		}
+	}
+
+	if (list_empty(&commit_transaction->t_check_mark_list)) {
+		commit_transaction->t_real_commit = 1;
+		/*printk(KERN_ERR "real commit!!\n");*/
+	}
+	/*else*/
+		/*printk(KERN_ERR "no real commit %d!!\n", count);*/
+
+	spin_unlock(&commit_transaction->t_mark_lock);
+
 	if (cbh)
 		err = journal_wait_on_commit_record(journal, cbh);
 	if (zj_has_feature_async_commit(journal) &&

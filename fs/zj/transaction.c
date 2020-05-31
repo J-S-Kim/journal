@@ -81,7 +81,7 @@ void zj_journal_free_transaction(ztransaction_t *transaction)
  */
 
 static ztransaction_t *
-zj_get_transaction(zjournal_t *journal, ztransaction_t *transaction)
+zj_get_transaction(zjournal_t *journal, ztransaction_t *transaction, struct list_head *percpu_list)
 {
 	int cpu;
 	transaction->t_journal = journal;
@@ -96,9 +96,14 @@ zj_get_transaction(zjournal_t *journal, ztransaction_t *transaction)
 		   atomic_read(&journal->j_reserved_credits));
 	atomic_set(&transaction->t_handle_count, 0);
 	INIT_LIST_HEAD(&transaction->t_inode_list);
+
+	INIT_LIST_HEAD(&transaction->t_check_mark_list);
+	INIT_LIST_HEAD(&transaction->t_complete_mark_list);
+	spin_lock_init(&transaction->t_mark_lock);
+
 	INIT_LIST_HEAD(&transaction->t_private_list);
 
-	transaction->t_commit_list = alloc_percpu_gfp(struct list_head, GFP_ATOMIC);
+	transaction->t_commit_list = percpu_list;
 
 	for_each_possible_cpu(cpu)
 		INIT_LIST_HEAD(per_cpu_ptr(transaction->t_commit_list, cpu));
@@ -112,6 +117,7 @@ zj_get_transaction(zjournal_t *journal, ztransaction_t *transaction)
 	transaction->t_max_wait = 0;
 	transaction->t_start = jiffies;
 	transaction->t_requested = 0;
+	transaction->t_real_commit = 0;
 
 	return transaction;
 }
@@ -284,6 +290,7 @@ static int start_this_handle(zjournal_t *journal, handle_t *handle,
 			     gfp_t gfp_mask)
 {
 	ztransaction_t	*transaction, *new_transaction = NULL;
+	struct list_head *new_percpu_list = NULL;
 	int		blocks = handle->h_buffer_credits;
 	int		rsv_blocks = 0;
 	unsigned long ts = jiffies;
@@ -318,6 +325,12 @@ alloc_transaction:
 						    gfp_mask);
 		if (!new_transaction)
 			return -ENOMEM;
+
+		new_percpu_list = alloc_percpu_gfp(struct list_head, gfp_mask);
+		if (!new_percpu_list) {
+			zj_journal_free_transaction(new_transaction);
+			return -ENOMEM;
+		}
 	}
 
 	jbd_debug(3, "New handle %p going live.\n", handle);
@@ -333,6 +346,8 @@ repeat:
 	    (journal->j_errno != 0 && !(journal->j_flags & ZJ_ACK_ERR))) {
 		read_unlock(&journal->j_state_lock);
 		zj_journal_free_transaction(new_transaction);
+		if (new_percpu_list)
+			free_percpu(new_percpu_list);
 		return -EROFS;
 	}
 
@@ -355,8 +370,9 @@ repeat:
 		write_lock(&journal->j_state_lock);
 		if (!journal->j_running_transaction &&
 		    (handle->h_reserved || !journal->j_barrier_count)) {
-			zj_get_transaction(journal, new_transaction);
+			zj_get_transaction(journal, new_transaction, new_percpu_list);
 			new_transaction = NULL;
+			new_percpu_list = NULL;
 		}
 		write_unlock(&journal->j_state_lock);
 		goto repeat;
@@ -396,6 +412,8 @@ repeat:
 
 	rwsem_acquire_read(&journal->j_trans_commit_map, 0, 0, _THIS_IP_);
 	zj_journal_free_transaction(new_transaction);
+	if (new_percpu_list)
+		free_percpu(new_percpu_list);
 	/*
 	 * Ensure that no allocations done while the transaction is open are
 	 * going to recurse back to the fs layer.
@@ -837,14 +855,14 @@ static inline void add_commit_mark_two_side(zjournal_t *journal, ztransaction_t 
 	}
 
 	//add local
-	my_commit = zj_alloc_commit(GFP_KERNEL);
+	my_commit = zj_alloc_commit(GFP_ATOMIC);
 	my_commit->core = counter_core;
 	my_commit->tid = counter_tid;
 	list_add(&my_commit->pos, my_head);
 
 	//add remote
 	counter_head = per_cpu_ptr(jtransaction->t_commit_list, my_core);
-	counter_commit = zj_alloc_commit(GFP_KERNEL);
+	counter_commit = zj_alloc_commit(GFP_ATOMIC);
 	counter_commit->core = my_core;
 	counter_commit->tid = my_tid;
 	list_add(&counter_commit->pos, counter_head);
@@ -869,7 +887,7 @@ static inline void add_commit_mark_only_mine(zjournal_t *journal, ztransaction_t
 	}
 
 	//add local
-	my_commit = zj_alloc_commit(GFP_KERNEL);
+	my_commit = zj_alloc_commit(GFP_ATOMIC);
 	my_commit->core = counter_core;
 	my_commit->tid = counter_tid;
 	list_add(&my_commit->pos, my_head);
@@ -1447,6 +1465,7 @@ int zj_journal_dirty_metadata(handle_t *handle, struct buffer_head *bh)
 	if (is_handle_aborted(handle))
 		return -EROFS;
 	if (!buffer_jbd(bh)) {
+		printk(KERN_ERR "NO JH\n");
 		ret = -EUCLEAN;
 		goto out;
 	}
@@ -1973,11 +1992,16 @@ static void __zj_zjournal_temp_unlink_buffer(struct zjournal_head *jh)
 	struct zjournal_head **list = NULL;
 	ztransaction_t *transaction;
 	struct buffer_head *bh = jh2bh(jh);
+	int real_commit = 1;
 
 	J_ASSERT_JH(jh, jbd_is_locked_bh_state(bh));
 	transaction = jh->b_transaction;
-	if (transaction)
+	if (transaction) {
 		assert_spin_locked(&transaction->t_journal->j_list_lock);
+		spin_lock(&transaction->t_mark_lock);
+		real_commit = transaction->t_real_commit;
+		spin_unlock(&transaction->t_mark_lock);
+	}
 
 	J_ASSERT_JH(jh, jh->b_jlist < BJ_Types);
 	if (jh->b_jlist != BJ_None)
@@ -2006,7 +2030,10 @@ static void __zj_zjournal_temp_unlink_buffer(struct zjournal_head *jh)
 	jh->b_jlist = BJ_None;
 	if (transaction && is_journal_aborted(transaction->t_journal))
 		clear_buffer_jbddirty(bh);
-	else if (test_clear_buffer_jbddirty(bh))
+	// FIXME 현재 내가 파악하지 못하는 상황은 forget 시점...
+	// 그 이외의 상황은 real commit이 아닐 시 dirty mark를 
+	// 찍지 않아도 문제가 없다.
+	else if (real_commit && test_clear_buffer_jbddirty(bh))
 		mark_buffer_dirty(bh);	/* Expose it to the VM */
 }
 
