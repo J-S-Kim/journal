@@ -80,6 +80,7 @@ EXPORT_SYMBOL(zj_journal_init_inode);
 EXPORT_SYMBOL(zj_journal_check_used_features);
 EXPORT_SYMBOL(zj_journal_check_available_features);
 EXPORT_SYMBOL(zj_journal_set_features);
+EXPORT_SYMBOL(zj_get_target_transaction);
 EXPORT_SYMBOL(zj_journal_load);
 EXPORT_SYMBOL(zj_journal_destroy);
 EXPORT_SYMBOL(zj_journal_abort);
@@ -95,6 +96,7 @@ EXPORT_SYMBOL(zj_journal_blocks_per_page);
 EXPORT_SYMBOL(zj_journal_invalidatepage);
 EXPORT_SYMBOL(zj_zjournal_try_to_free_buffers);
 EXPORT_SYMBOL(zj_journal_force_commit);
+EXPORT_SYMBOL(zj_journal_force_commit_start);
 EXPORT_SYMBOL(zj_journal_inode_add_write);
 EXPORT_SYMBOL(zj_journal_inode_add_wait);
 EXPORT_SYMBOL(zj_journal_init_jbd_inode);
@@ -591,6 +593,33 @@ static int __zj_journal_force_commit(zjournal_t *journal)
 		ret = 1;
 
 	return ret;
+}
+
+int zj_journal_force_commit_start(zjournal_t *journal)
+{
+	ztransaction_t *transaction = NULL;
+	tid_t tid;
+	int need_to_start = 0;
+	
+	read_lock(&journal->j_state_lock);
+	if (journal->j_running_transaction && !current->journal_info) {
+		transaction = journal->j_running_transaction;
+		if (!tid_geq(journal->j_commit_request, transaction->t_tid))
+			need_to_start = 1;
+	} else if (journal->j_committing_transaction)
+		transaction = journal->j_committing_transaction;
+
+	if (!transaction) {
+		/* Nothing to commit */
+		read_unlock(&journal->j_state_lock);
+		return 0;
+	}
+	tid = transaction->t_tid;
+	read_unlock(&journal->j_state_lock);
+	if (need_to_start)
+		zj_log_start_commit(journal, tid);
+
+	return tid;
 }
 
 /**
@@ -1175,7 +1204,12 @@ static zjournal_t *journal_init_common(struct block_device *bdev,
 	journal->j_wbufsize = n;
 	journal->j_wbuf = kmalloc_array(n, sizeof(struct buffer_head *),
 					GFP_KERNEL);
+	journal->j_cbuf = kmalloc_array(ZJ_NR_COMMIT, sizeof(commit_mark_t),
+					GFP_KERNEL);
+	journal->j_cbuf_debug = 0;
 	if (!journal->j_wbuf)
+		goto err_cleanup;
+	if (!journal->j_cbuf)
 		goto err_cleanup;
 
 	bh = getblk_unmovable(journal->j_dev, start, journal->j_blocksize);
@@ -1191,6 +1225,7 @@ static zjournal_t *journal_init_common(struct block_device *bdev,
 
 err_cleanup:
 	kfree(journal->j_wbuf);
+	kfree(journal->j_cbuf);
 	zj_journal_destroy_revoke(journal);
 	kfree(journal);
 	return NULL;
@@ -1612,6 +1647,65 @@ out:
 	return err;
 }
 
+// TODO
+// core와 tid에 해당하는 transaction을 찾아서 반환해준다.
+// running, committing, checkpointing 들 중 하나일 것이며
+// 그게 아니면 NULL이 반환된다.
+ztransaction_t *zj_get_target_transaction(zjournal_t *journal, int core, tid_t tid)
+{
+	zjournal_t *target_journal;
+	ztransaction_t *target_transaction, *last_transaction, *next_transaction;
+	zjournal_t **journals = (zjournal_t **)journal->j_private_start;
+
+	target_journal = journals[core];
+
+	if (!target_journal)
+		return NULL;
+
+	read_lock(&target_journal->j_state_lock);
+	spin_lock(&target_journal->j_list_lock);
+	target_transaction = 
+		target_journal->j_checkpoint_transactions;
+
+	if (!target_transaction) {
+		if (((target_transaction = 
+	               target_journal->j_committing_transaction) != NULL) &&
+		      target_transaction->t_tid == tid)
+			goto out;
+
+		if ((target_transaction = 
+		       target_journal->j_running_transaction) != NULL &&
+		      target_transaction->t_tid == tid) 
+			goto out;
+
+	} else {
+		// tid가 가장 오래된 cp TX보다도 작다는 것은 해당 tid가 이미
+		// real commit되고 checkpointing되어 사라졌다는 것
+		if (tid < target_transaction->t_tid) {
+			target_transaction = NULL;
+			goto out;
+		}
+
+		// tid가 같은 cp TX를 찾아본다.
+		last_transaction = target_transaction->t_cpprev;
+		next_transaction = target_transaction;
+		do {
+			target_transaction = next_transaction;
+			next_transaction = target_transaction->t_cpnext;
+			if (target_transaction->t_tid == tid)
+				goto out;
+		} while (target_transaction != last_transaction);
+	}
+
+	target_transaction = NULL;
+out:
+	spin_unlock(&target_journal->j_list_lock);
+	read_unlock(&target_journal->j_state_lock);
+
+	return target_transaction;
+
+}
+
 /*
  * Load the on-disk journal superblock and read the key fields into the
  * zjournal_t.
@@ -1737,6 +1831,8 @@ int zj_journal_destroy(zjournal_t *journal)
 		 * looping forever
 		 */
 		if (err) {
+			// TODO
+			// real commit이 아닌 경우인데 강제로 destroy 해도 괜찮은가?
 			zj_journal_destroy_checkpoint(journal);
 			spin_lock(&journal->j_list_lock);
 			break;
@@ -1774,6 +1870,7 @@ int zj_journal_destroy(zjournal_t *journal)
 	if (journal->j_chksum_driver)
 		crypto_free_shash(journal->j_chksum_driver);
 	kfree(journal->j_wbuf);
+	kfree(journal->j_cbuf);
 	kfree(journal);
 
 	return err;
