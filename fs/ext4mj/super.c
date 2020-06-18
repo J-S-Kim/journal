@@ -4608,6 +4608,7 @@ static zjournal_t *ext4mj_get_journal(struct super_block *sb,
 		return NULL;
 	}
 	journal->j_private = sb;
+	journal->j_private_start = EXT4MJ_SB(sb)->_s_journal;
 	ext4mj_init_journal_params(sb, journal);
 	return journal;
 }
@@ -4684,6 +4685,7 @@ static zjournal_t *ext4mj_get_dev_journal(struct super_block *sb,
 		goto out_bdev;
 	}
 	journal->j_private = sb;
+	journal->j_private_start = EXT4MJ_SB(sb)->_s_journal;
 	ll_rw_block(REQ_OP_READ, REQ_META | REQ_PRIO, 1, &journal->j_sb_buffer);
 	wait_on_buffer(journal->j_sb_buffer);
 	if (!buffer_uptodate(journal->j_sb_buffer)) {
@@ -5002,6 +5004,14 @@ static void ext4mj_clear_journal_err(struct super_block *sb,
 	}
 }
 
+int ext4mj_force_commit_all(struct super_block *sb)
+{
+	if (sb_rdonly(sb))
+		return 0;
+
+	return ext4mj_journal_force_commit_all(sb);
+}
+
 /*
  * Force the running and committing transactions to commit,
  * and wait on the commit.
@@ -5013,7 +5023,6 @@ int ext4mj_force_commit(struct super_block *sb)
 	if (sb_rdonly(sb))
 		return 0;
 
-	//Jongseok:: 코어 전부 commit 할지, 하나만 할지 정해서 구현
 	journal = EXT4MJ_SB(sb)->s_journal;
 	return ext4mj_journal_force_commit(journal);
 }

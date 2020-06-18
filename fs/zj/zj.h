@@ -184,7 +184,13 @@ typedef struct commit_block_tag_s {
     __be32		tid;
 } commit_block_tag_t;
 
+typedef struct commit_mark_s {
+    __u16		core;
+    __u32		tid;
+} commit_mark_t;
+
 typedef struct commit_entry_s {
+    __u16		state:1;
     __u16		core;
     __u32		tid;
     struct list_head pos;
@@ -646,7 +652,11 @@ struct ztransaction_s
 	 */
 	struct list_head	t_inode_list;
 
+	struct list_head	t_check_mark_list;
+	struct list_head	t_complete_mark_list;
+
     struct list_head  *t_commit_list;
+	spinlock_t		t_mark_lock;
 	/*
 	 * Protects info related to handles
 	 */
@@ -713,6 +723,7 @@ struct ztransaction_s
 	 * waiting for it to finish.
 	 */
 	unsigned int t_synchronous_commit:1;
+	unsigned int t_real_commit:1;
 
 	/* Disk flush needs to be sent to fs partition [no locking] */
 	int			t_need_data_flush;
@@ -753,6 +764,7 @@ zj_time_diff(unsigned long start, unsigned long end)
 }
 
 #define ZJ_NR_BATCH	64
+#define ZJ_NR_COMMIT	512
 
 /**
  * struct journal_s - The journal_s type is the concrete type associated with
@@ -1062,6 +1074,9 @@ struct zjournal_s
 	 */
 	struct buffer_head	**j_wbuf;
 
+    commit_mark_t *j_cbuf;
+    int j_cbuf_debug;
+
 	/**
 	 * @j_wbufsize:
 	 *
@@ -1140,6 +1155,7 @@ struct zjournal_s
 	 * superblock pointer here.
 	 */
 	void *j_private;
+	void **j_private_start;
 
 	/**
 	 * @j_chksum_driver:
@@ -1398,6 +1414,8 @@ extern int	   zj_journal_set_features
 		   (zjournal_t *, unsigned long, unsigned long, unsigned long);
 extern void	   zj_journal_clear_features
 		   (zjournal_t *, unsigned long, unsigned long, unsigned long);
+extern ztransaction_t *zj_get_target_transaction(zjournal_t *journal, 
+                                                  int core, tid_t tid);
 extern int	   zj_journal_load       (zjournal_t *journal, int core);
 extern int	   zj_journal_destroy    (zjournal_t *);
 extern int	   zj_journal_recover    (zjournal_t *journal);
@@ -1413,6 +1431,7 @@ extern void	   zj_journal_ack_err    (zjournal_t *);
 extern int	   zj_journal_clear_err  (zjournal_t *);
 extern int	   zj_journal_bmap(zjournal_t *, unsigned long, unsigned long long *);
 extern int	   zj_journal_force_commit(zjournal_t *);
+extern int	   zj_journal_force_commit_start(zjournal_t *);
 extern int	   zj_journal_force_commit_nested(zjournal_t *);
 extern int	   zj_journal_inode_add_write(handle_t *handle, struct zj_inode *inode);
 extern int	   zj_journal_inode_add_wait(handle_t *handle, struct zj_inode *inode);
@@ -1652,6 +1671,31 @@ static inline tid_t  zj_get_latest_transaction(zjournal_t *journal)
 		tid = journal->j_running_transaction->t_tid;
 	read_unlock(&journal->j_state_lock);
 	return tid;
+}
+
+static inline int zj_check_mark_in_list(struct list_head *list, commit_entry_t *mark)
+{
+    commit_entry_t *check_mark;
+
+    list_for_each_entry(check_mark, list, pos) {
+        if (check_mark->tid == mark->tid && 
+                check_mark->core == mark->core) 
+            return 1;
+        
+    }
+    return 0;
+}
+
+static inline int zj_check_mark_value_in_list(struct list_head *list, int core, int tid)
+{
+    commit_entry_t *check_mark;
+
+    list_for_each_entry(check_mark, list, pos) {
+        if (check_mark->tid == tid && 
+                check_mark->core == core) 
+            return 1;
+    }
+    return 0;
 }
 
 #ifdef __KERNEL__

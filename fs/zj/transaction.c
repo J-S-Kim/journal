@@ -96,6 +96,11 @@ zj_get_transaction(zjournal_t *journal, ztransaction_t *transaction, struct list
 		   atomic_read(&journal->j_reserved_credits));
 	atomic_set(&transaction->t_handle_count, 0);
 	INIT_LIST_HEAD(&transaction->t_inode_list);
+
+	INIT_LIST_HEAD(&transaction->t_check_mark_list);
+	INIT_LIST_HEAD(&transaction->t_complete_mark_list);
+	spin_lock_init(&transaction->t_mark_lock);
+
 	INIT_LIST_HEAD(&transaction->t_private_list);
 
 	transaction->t_commit_list = percpu_list;
@@ -112,6 +117,7 @@ zj_get_transaction(zjournal_t *journal, ztransaction_t *transaction, struct list
 	transaction->t_max_wait = 0;
 	transaction->t_start = jiffies;
 	transaction->t_requested = 0;
+	transaction->t_real_commit = 0;
 
 	return transaction;
 }
@@ -1166,9 +1172,9 @@ static bool zj_write_access_granted(handle_t *handle, struct buffer_head *bh,
 	/* For undo access buffer must have data copied */
 	if (undo && !jh->b_committed_data)
 		goto out;
-	/*if (jh->b_transaction != handle->h_transaction &&*/
-	    /*jh->b_next_transaction != handle->h_transaction)*/
-		/*goto out;*/
+	if (jh->b_transaction != handle->h_transaction &&
+	    jh->b_next_transaction != handle->h_transaction)
+		goto out;
 	/*
 	 * There are two reasons for the barrier here:
 	 * 1) Make sure to fetch b_bh after we did previous checks so that we
@@ -1459,6 +1465,7 @@ int zj_journal_dirty_metadata(handle_t *handle, struct buffer_head *bh)
 	if (is_handle_aborted(handle))
 		return -EROFS;
 	if (!buffer_jbd(bh)) {
+		printk(KERN_ERR "NO JH\n");
 		ret = -EUCLEAN;
 		goto out;
 	}
@@ -1985,11 +1992,16 @@ static void __zj_zjournal_temp_unlink_buffer(struct zjournal_head *jh)
 	struct zjournal_head **list = NULL;
 	ztransaction_t *transaction;
 	struct buffer_head *bh = jh2bh(jh);
+	int real_commit = 1;
 
 	J_ASSERT_JH(jh, jbd_is_locked_bh_state(bh));
 	transaction = jh->b_transaction;
-	if (transaction)
+	if (transaction) {
 		assert_spin_locked(&transaction->t_journal->j_list_lock);
+		spin_lock(&transaction->t_mark_lock);
+		real_commit = transaction->t_real_commit;
+		spin_unlock(&transaction->t_mark_lock);
+	}
 
 	J_ASSERT_JH(jh, jh->b_jlist < BJ_Types);
 	if (jh->b_jlist != BJ_None)
@@ -2018,7 +2030,10 @@ static void __zj_zjournal_temp_unlink_buffer(struct zjournal_head *jh)
 	jh->b_jlist = BJ_None;
 	if (transaction && is_journal_aborted(transaction->t_journal))
 		clear_buffer_jbddirty(bh);
-	else if (test_clear_buffer_jbddirty(bh))
+	// FIXME 현재 내가 파악하지 못하는 상황은 forget 시점...
+	// 그 이외의 상황은 real commit이 아닐 시 dirty mark를 
+	// 찍지 않아도 문제가 없다.
+	else if (real_commit && test_clear_buffer_jbddirty(bh))
 		mark_buffer_dirty(bh);	/* Expose it to the VM */
 }
 

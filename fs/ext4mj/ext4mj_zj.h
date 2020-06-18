@@ -358,6 +358,32 @@ static inline int ext4mj_journal_blocks_per_page(struct inode *inode)
 	return 0;
 }
 
+static inline int ext4mj_journal_force_commit_all(struct super_block *sb)
+{
+	int error = 0, i;
+	zjournal_t *journal;
+	struct ext4mj_sb_info *sbi = EXT4MJ_SB(sb);
+    tid_t tid[EXT4MJ_NUM_JOURNALS];
+
+	for(i = 0; i < sbi->s_num_journals; i++) {
+		if((journal = sbi->_s_journal[i])) 
+            tid[i] = zj_journal_force_commit_start(journal);
+    }
+
+	for(i = 0; i < sbi->s_num_journals; i++) {
+        if (!tid[i])
+            continue;
+
+		if((journal = sbi->_s_journal[i])) 
+            error = zj_log_wait_commit(journal, tid[i]);
+
+        if (error)
+            return error;
+    }
+
+    return 0;
+}
+
 static inline int ext4mj_journal_force_commit(zjournal_t *journal)
 {
 	if (journal)
@@ -398,6 +424,7 @@ static inline void ext4mj_update_inode_fsync_trans(handle_t *handle,
 
 /* super.c */
 int ext4mj_force_commit(struct super_block *sb);
+int ext4mj_force_commit_all(struct super_block *sb);
 
 /*
  * Ext4 inode journal modes
