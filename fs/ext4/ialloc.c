@@ -881,6 +881,9 @@ struct inode *__ext4_new_inode(handle_t *handle, struct inode *dir,
 		ret2 = find_group_other(sb, dir, &group, mode);
 
 got_group:
+#ifdef PER_GROUP_ALLOC
+	group = (sbi->s_groups_count/num_online_cpus()) * current->cpu;
+#endif
 	EXT4_I(dir)->i_last_alloc_group = group;
 	err = -ENOSPC;
 	if (ret2 == -1)

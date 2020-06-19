@@ -143,6 +143,10 @@ struct ext4_locality_group {
 	/* list of preallocations */
 	struct list_head	lg_prealloc_list[PREALLOC_TB_SIZE];
 	spinlock_t		lg_prealloc_lock;
+#ifdef PER_GROUP_ALLOC
+    unsigned long lg_last_group;
+    unsigned long lg_last_start;
+#endif
 };
 
 struct ext4_allocation_context {

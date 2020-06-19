@@ -1682,8 +1682,13 @@ static void ext4_mb_use_best_found(struct ext4_allocation_context *ac,
 	/* store last allocated for subsequent stream allocation */
 	if (ac->ac_flags & EXT4_MB_STREAM_ALLOC) {
 		spin_lock(&sbi->s_md_lock);
+#ifdef PER_GROUP_ALLOC
+		ac->ac_lg->lg_last_group = ac->ac_f_ex.fe_group;
+		ac->ac_lg->lg_last_start = ac->ac_f_ex.fe_start;
+#else
 		sbi->s_mb_last_group = ac->ac_f_ex.fe_group;
 		sbi->s_mb_last_start = ac->ac_f_ex.fe_start;
+#endif
 		spin_unlock(&sbi->s_md_lock);
 	}
 }
@@ -2161,8 +2166,13 @@ ext4_mb_regular_allocator(struct ext4_allocation_context *ac)
 	if (ac->ac_flags & EXT4_MB_STREAM_ALLOC) {
 		/* TBD: may be hot point */
 		spin_lock(&sbi->s_md_lock);
+#ifdef PER_GROUP_ALLOC
+		ac->ac_g_ex.fe_group = ac->ac_lg->lg_last_group;
+		ac->ac_g_ex.fe_start = ac->ac_lg->lg_last_start;
+#else
 		ac->ac_g_ex.fe_group = sbi->s_mb_last_group;
 		ac->ac_g_ex.fe_start = sbi->s_mb_last_start;
+#endif
 		spin_unlock(&sbi->s_md_lock);
 	}
 
@@ -2686,6 +2696,10 @@ int ext4_mb_init(struct super_block *sb)
 	for_each_possible_cpu(i) {
 		struct ext4_locality_group *lg;
 		lg = per_cpu_ptr(sbi->s_locality_groups, i);
+#ifdef PER_GROUP_ALLOC
+		lg->lg_last_group = (sbi->s_groups_count/num_online_cpus()) * i;
+		lg->lg_last_start = 0;
+#endif
 		mutex_init(&lg->lg_mutex);
 		for (j = 0; j < PREALLOC_TB_SIZE; j++)
 			INIT_LIST_HEAD(&lg->lg_prealloc_list[j]);
@@ -4227,6 +4241,9 @@ static void ext4_mb_group_or_file(struct ext4_allocation_context *ac)
 	size = max(size, isize);
 	if (size > sbi->s_mb_stream_request) {
 		ac->ac_flags |= EXT4_MB_STREAM_ALLOC;
+#ifdef PER_GROUP_ALLOC
+		ac->ac_lg = raw_cpu_ptr(sbi->s_locality_groups);
+#endif
 		return;
 	}
 
