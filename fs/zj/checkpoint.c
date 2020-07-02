@@ -89,11 +89,13 @@ static inline void __zj_mark_enqueue(ztransaction_t *transaction,
 	int repeat, checkpoint = 0, checkpointing;
 	int i, index = 0, jid;
 	tid_t tid;
+	zjournal_t *journal = transaction->t_journal;
 	LIST_HEAD(mark_list);
-	commit_mark_t *buf = transaction->t_journal->j_cbuf;
+	commit_mark_t *buf = journal->j_cbuf;
 
 	J_ASSERT(rel_transaction->t_state == T_FINISHED);
 
+	spin_lock(&journal->j_mark_lock);
 	if (transaction->t_journal->j_cbuf_debug)
 		printk(KERN_ERR "Using cbuf another place, need lock?\n");
 
@@ -125,6 +127,7 @@ repeat_search:
 
 	if (!index) {
 		transaction->t_journal->j_cbuf_debug = 0;
+		spin_unlock(&journal->j_mark_lock);
 		return;
 	}
 
@@ -176,6 +179,7 @@ list_add:
 
 	/*printk(KERN_ERR "end enqueu\n");*/
 	transaction->t_journal->j_cbuf_debug = 0;
+	spin_unlock(&journal->j_mark_lock);
 	return;
 }
 
@@ -183,22 +187,42 @@ static int __zj_cp_real_commit(ztransaction_t *transaction, int force)
 {
 	ztransaction_t *rel_transaction;
 	zjournal_t *rel_journal;
+	zjournal_t *journal = transaction->t_journal;
 
 	
 	spin_lock(&transaction->t_mark_lock);
+	transaction->t_real_committing = 1;
 	while (!list_empty(&transaction->t_check_mark_list)) {
 		commit_entry_t *cur_mark = list_entry(transaction->t_check_mark_list.next, 
 							commit_entry_t, pos);
 
 		/*printk(KERN_ERR "start %d/%d\n", transaction->t_journal->j_core_id, transaction->t_tid);*/
 		/*printk(KERN_ERR "mark %d, %d\n",cur_mark->core, cur_mark->tid);*/
-		if (cur_mark->state)
+		if (cur_mark->state) {
+			printk(KERN_ERR "AAA\n");
+			spin_unlock(&transaction->t_mark_lock);
+
+			while(cur_mark->state) {
+				printk(KERN_ERR "now wait mark %d/%d\n", cur_mark->core, cur_mark->tid);
+			}
+
+			if (unlikely(ZERO_OR_NULL_PTR(transaction))) {
+				transaction->t_real_committing = 0;
+				printk(KERN_ERR "CCC\n");
+				return 2;
+			}
+
+			spin_lock(&transaction->t_mark_lock);
+			printk(KERN_ERR "%p, %d, %d\n",transaction, transaction->t_real_commit,
+					list_empty(&transaction->t_check_mark_list));
+			printk(KERN_ERR "BBB\n");
 			continue;
+		}
 
 		cur_mark->state = 1;
 		spin_unlock(&transaction->t_mark_lock);
 
-		rel_transaction = zj_get_target_transaction(transaction->t_journal, 
+		rel_transaction = zj_get_target_transaction(journal, 
 				cur_mark->core, cur_mark->tid);
 		if (!rel_transaction)
 			// 어떤 케이스가 있을지는 모르겠지만 우선 당장에 생각나는 것은
@@ -219,12 +243,14 @@ static int __zj_cp_real_commit(ztransaction_t *transaction, int force)
 			read_unlock(&rel_journal->j_state_lock);
 
 			if (!force) {
-				/*printk(KERN_ERR "force close\n");*/
+				spin_lock(&transaction->t_mark_lock);
+				transaction->t_real_committing = 0;
 				cur_mark->state = 0;
+				spin_unlock(&transaction->t_mark_lock);
 				return 1;
 			}
 
-			/*printk(KERN_ERR "wait TX\n");*/
+			printk(KERN_ERR "wait TX\n");
 			zj_log_start_commit(rel_journal, rel_transaction->t_tid);
 			zj_log_wait_commit(rel_journal, rel_transaction->t_tid);
 			read_lock(&rel_journal->j_state_lock);
@@ -245,6 +271,7 @@ mark_complete:
 	if (!transaction->t_real_commit)
 		transaction->t_real_commit = 1;
 
+	transaction->t_real_committing = 0;
 	spin_unlock(&transaction->t_mark_lock);
 	/*printk(KERN_ERR "real commit TX %d\n", transaction->t_tid);*/
 
@@ -381,7 +408,7 @@ int zj_log_do_checkpoint(zjournal_t *journal)
 	ztransaction_t		*transaction;
 	tid_t			this_tid;
 	int			result, batch_count = 0;
-	int			force_cp = 0;
+	int			force_cp = 0, rt = 0;
 
 	jbd_debug(1, "Start checkpoint\n");
 
@@ -400,6 +427,7 @@ int zj_log_do_checkpoint(zjournal_t *journal)
 	 * OK, we need to start writing disk blocks.  Take one transaction
 	 * and write it.
 	 */
+retry_real:
 	result = 0;
 	spin_lock(&journal->j_list_lock);
 	if (!journal->j_checkpoint_transactions)
@@ -422,10 +450,20 @@ restart:
 	// real commit이 아니면 real commit이 될 때까지BFS 진행
 	spin_lock(&transaction->t_mark_lock);
 	if (!transaction->t_real_commit) {
+		if (transaction->t_real_committing) {
+			spin_unlock(&transaction->t_mark_lock);
+			spin_unlock(&journal->j_list_lock);
+			goto retry_real;
+		}
 		spin_unlock(&transaction->t_mark_lock);
 		spin_unlock(&journal->j_list_lock);
-		__zj_cp_real_commit(transaction, 1);
+		rt = __zj_cp_real_commit(transaction, 1);
 
+		if (unlikely(rt)) {
+			printk(KERN_ERR "CCC2\n");
+			spin_lock(&journal->j_list_lock);
+			goto out;
+		}
 		// 처음부터 real commit인 TX가 아니라 위의 작업을 통해서 real commit이 된
 		// TX라면dirty mark를 찍는게 손해다. 어차피 여기에서 io를 직접 내리는게 빠를듯
 		force_cp = 1;
@@ -550,6 +588,12 @@ restart2:
 		 */
 		if (__zj_journal_remove_checkpoint(jh))
 			break;
+	}
+	if (journal->j_checkpoint_transactions == transaction &&
+	    transaction->t_checkpoint_list == NULL &&
+	    transaction->t_checkpoint_io_list == NULL) {
+		__zj_journal_drop_transaction(journal, transaction);
+		zj_journal_free_transaction(transaction);
 	}
 out:
 	spin_unlock(&journal->j_list_lock);
@@ -708,6 +752,11 @@ void __zj_journal_clean_checkpoint_list(zjournal_t *journal, bool destroy)
 
 		spin_lock(&transaction->t_mark_lock);
 		if (!transaction->t_real_commit) {
+			if (transaction->t_real_committing) {
+				/*printk(KERN_ERR "2 %p\n", transaction);*/
+				spin_unlock(&transaction->t_mark_lock);
+				continue;
+			}
 			spin_unlock(&transaction->t_mark_lock);
 			spin_unlock(&journal->j_list_lock);
 			rt = __zj_cp_real_commit(transaction, 0);
@@ -715,7 +764,13 @@ void __zj_journal_clean_checkpoint_list(zjournal_t *journal, bool destroy)
 			// real commit이 되었다면 dirty mark를 찍어준다.
 			if (!rt) {
 				spin_lock(&journal->j_list_lock);
-				journal_dirty_one_cp_list(transaction->t_checkpoint_list);
+				if (transaction->t_cpnext &&
+				transaction->t_checkpoint_list == NULL &&
+				transaction->t_checkpoint_io_list == NULL) {
+					__zj_journal_drop_transaction(journal, transaction);
+					zj_journal_free_transaction(transaction);
+				} else
+					journal_dirty_one_cp_list(transaction->t_checkpoint_list);
 				continue;
 			}
 			// real commit에 실패했으므로 걍 여기서 끝
@@ -907,9 +962,11 @@ void __zj_journal_drop_transaction(zjournal_t *journal, ztransaction_t *transact
 				transaction->t_cpnext;
 		if (journal->j_checkpoint_transactions == transaction)
 			journal->j_checkpoint_transactions = NULL;
+
+		transaction->t_cpnext = transaction->t_cpprev = NULL;
 	}
 
-	free_percpu(transaction->t_commit_list);
+	zj_journal_free_commit_list(transaction->t_commit_list);
 
 	J_ASSERT(transaction->t_real_commit == 1);
 	J_ASSERT(transaction->t_state == T_FINISHED);

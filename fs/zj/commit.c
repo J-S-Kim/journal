@@ -154,7 +154,7 @@ static int journal_submit_commit_record(zjournal_t *journal,
 
 	/*printk(KERN_ERR "%d, %d\n", journal->j_core_id, commit_transaction->t_tid);*/
 	for_each_possible_cpu(cpu) {
-		struct list_head *rc = per_cpu_ptr(commit_transaction->t_commit_list, cpu);
+		struct list_head *rc = &commit_transaction->t_commit_list[cpu];
 		commit_entry_t *tc;
 
 		list_for_each_entry(tc, rc, pos) {
@@ -401,6 +401,9 @@ void zj_journal_commit_transaction(zjournal_t *journal)
 	int csum_size = 0;
 	LIST_HEAD(io_bufs);
 	LIST_HEAD(log_bufs);
+#ifdef ZJ_PROFILE
+	unsigned long wstart_time, wend_time;
+#endif
 
 	if (zj_journal_has_csum_v2or3(journal))
 		csum_size = sizeof(struct zj_journal_block_tail);
@@ -587,6 +590,9 @@ void zj_journal_commit_transaction(zjournal_t *journal)
 	J_ASSERT(commit_transaction->t_nr_buffers <=
 		 atomic_read(&commit_transaction->t_outstanding_credits));
 
+#ifdef ZJ_PROFILE
+	wstart_time = jiffies;
+#endif
 	while (atomic_read(&commit_transaction->t_nexts)) {
 		DEFINE_WAIT(wait);
 
@@ -599,6 +605,13 @@ void zj_journal_commit_transaction(zjournal_t *journal)
 		}
 		finish_wait(&journal->j_wait_nexts, &wait);
 	}
+#ifdef ZJ_PROFILE
+	wend_time = jiffies;
+	spin_lock(&journal->j_ov_lock);
+	journal->j_ov_stats.zj_wait_time2 += zj_time_diff(wstart_time, wend_time);
+	journal->j_ov_stats.zj_wait_page2++;
+	spin_unlock(&journal->j_ov_lock);
+#endif
 	err = 0;
 	bufs = 0;
 	descriptor = NULL;
@@ -915,7 +928,7 @@ start_journal_io:
 	int count = 0;
 	spin_lock(&commit_transaction->t_mark_lock);
 	for_each_possible_cpu(cpu) {
-		struct list_head *rc = per_cpu_ptr(commit_transaction->t_commit_list, cpu);
+		struct list_head *rc = &commit_transaction->t_commit_list[cpu];
 
 		while (!list_empty(rc)) {
 			commit_entry_t *tc = list_entry(rc->next, commit_entry_t, pos);
@@ -1192,8 +1205,10 @@ restart_loop:
 	/* Check if the transaction can be dropped now that we are finished */
 	if (commit_transaction->t_checkpoint_list == NULL &&
 	    commit_transaction->t_checkpoint_io_list == NULL) {
-		__zj_journal_drop_transaction(journal, commit_transaction);
-		zj_journal_free_transaction(commit_transaction);
+		if (commit_transaction->t_real_commit) {
+			__zj_journal_drop_transaction(journal, commit_transaction);
+			zj_journal_free_transaction(commit_transaction);
+		}
 	}
 	spin_unlock(&journal->j_list_lock);
 	write_unlock(&journal->j_state_lock);

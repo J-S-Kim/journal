@@ -921,6 +921,8 @@ static void ext4mj_put_super(struct super_block *sb)
 	for (i = 0; i < sbi->s_gdb_count; i++)
 		brelse(sbi->s_group_desc[i]);
 	kvfree(sbi->s_group_desc);
+	kvfree(sbi->_s_journal);
+	kvfree(es->_s_journal_inum);
 	kvfree(sbi->s_flex_groups);
 	percpu_counter_destroy(&sbi->s_freeclusters_counter);
 	percpu_counter_destroy(&sbi->s_freeinodes_counter);
@@ -3488,6 +3490,7 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 	__u64 blocks_count;
 	int err = 0;
 	unsigned int journal_ioprio = DEFAULT_JOURNAL_IOPRIO;
+	__le32 tmp_journal_inum[EXT4MJ_NUM_JOURNALS];
 	ext4mj_group_t first_not_zeroed;
 
 	if ((data && !orig_data) || !sbi)
@@ -4046,6 +4049,15 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 		ret = -ENOMEM;
 		goto failed_mount;
 	}
+	sbi->_s_journal = kvzalloc(EXT4MJ_NUM_JOURNALS *
+			sizeof(struct zjournal_s *),
+			GFP_KERNEL);
+	printk(KERN_ERR "zjournal size: %u\n", sizeof(struct zjournal_s));
+	if (sbi->_s_journal == NULL) {
+		ext4mj_msg(sb, KERN_ERR, "not enough memory");
+		ret = -ENOMEM;
+		goto failed_mount;
+	}
 	if (((u64)sbi->s_groups_count * sbi->s_inodes_per_group) !=
 	    le32_to_cpu(es->s_inodes_count)) {
 		ext4mj_msg(sb, KERN_ERR, "inodes count not valid: %u vs %llu",
@@ -4122,6 +4134,20 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 		if (ext4mj_multi_mount_protect(sb, le64_to_cpu(es->s_mmp_block)))
 			goto failed_mount3a;
 
+	for (i=0; i < EXT4MJ_NUM_JOURNALS; i++)
+		tmp_journal_inum[i] = *(&(es->s_checksum) + i + 1);
+
+	es->_s_journal_inum = kvmalloc(EXT4MJ_NUM_JOURNALS *
+			sizeof(__le32),
+			GFP_KERNEL);
+	if (es->_s_journal_inum == NULL) {
+		ext4mj_msg(sb, KERN_ERR, "not enough memory");
+		ret = -ENOMEM;
+		goto failed_mount3a;
+	}
+	for (i=0; i < EXT4MJ_NUM_JOURNALS; i++) {
+		es->_s_journal_inum[i] = tmp_journal_inum[i];
+	}
 	/*
 	 * The first inode we look at is the journal inode.  Don't try
 	 * root first: it may be modified in the journal!
@@ -4163,7 +4189,7 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 		sbi->s_def_mount_opt &= EXT4MJ_MOUNT_JOURNAL_CHECKSUM;
 		clear_opt(sb, JOURNAL_CHECKSUM);
 		clear_opt(sb, DATA_FLAGS);
-		for(i = 0; i < sbi->s_num_journals; i++)
+		for(i = 0; i < EXT4MJ_NUM_JOURNALS; i++)
 			EXT4MJ_SB(sb)->_s_journal[i] = NULL;
 		needs_recovery = 0;
 		goto no_journal;
@@ -4503,6 +4529,7 @@ failed_mount_wq:
 			sbi->_s_journal[i] = NULL;
 		}
 	}
+	kvfree(es->_s_journal_inum);
 failed_mount3a:
 	ext4mj_es_unregister_shrinker(sbi);
 failed_mount3:
@@ -4513,6 +4540,7 @@ failed_mount2:
 	for (i = 0; i < db_count; i++)
 		brelse(sbi->s_group_desc[i]);
 	kvfree(sbi->s_group_desc);
+	kvfree(sbi->_s_journal);
 failed_mount:
 	if (sbi->s_chksum_driver)
 		crypto_free_shash(sbi->s_chksum_driver);
