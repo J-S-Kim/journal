@@ -75,6 +75,10 @@ EXPORT_SYMBOL(journal_sync_buffer);
 EXPORT_SYMBOL(zj_journal_flush);
 EXPORT_SYMBOL(zj_journal_revoke);
 
+EXPORT_SYMBOL(journal_alloc_zjournal_head);
+EXPORT_SYMBOL(journal_free_zjournal_head);
+EXPORT_SYMBOL(zj_shadow);
+
 EXPORT_SYMBOL(zj_journal_init_dev);
 EXPORT_SYMBOL(zj_journal_init_inode);
 EXPORT_SYMBOL(zj_journal_check_used_features);
@@ -370,13 +374,14 @@ int zj_journal_write_metadata_buffer(ztransaction_t *transaction,
 				  struct buffer_head **bh_out,
 				  sector_t blocknr)
 {
-	int need_copy_out = 0;
+	int need_copy_out = 0, need_free = 0;
 	int done_copy_out = 0;
 	int do_escape = 0;
-	char *mapped_data;
-	struct buffer_head *new_bh;
+	char *mapped_data, *cold_data;
+	struct zjournal_head *cold_jh, *free_jh;
+	struct buffer_head *new_bh, *free_bh;
 	struct page *new_page;
-	unsigned int new_offset;
+	unsigned int new_offset, offset;
 	struct buffer_head *bh_in = jh2bh(jh_in);
 	zjournal_t *journal = transaction->t_journal;
 
@@ -389,12 +394,29 @@ int zj_journal_write_metadata_buffer(ztransaction_t *transaction,
 	 * also part of a shared mapping, and another thread has
 	 * decided to launch a writepage() against this buffer.
 	 */
-	J_ASSERT_BH(bh_in, buffer_jbddirty(bh_in));
+	jbd_lock_bh_state(bh_in);
+	/*if (!buffer_jbddirty(bh_in)) {*/
+		/*printk(KERN_ERR "tnext: %p, cpnext: %p, shadow: %d, cpcount %d\n", jh_in->b_tnext, jh_in->b_cpnext, buffer_shadow(bh_in), jh_in->b_cpcount);*/
+	/*}*/
+	/*J_ASSERT_BH(bh_in, buffer_jbddirty(bh_in));*/
+
+	if (buffer_shadow(bh_in)) {
+		//already freezed in do get write acc
+		done_copy_out = 1;
+		new_bh = bh_in;
+		cold_jh = jh_in;
+		if (cold_jh->b_cpcount)
+			printk(KERN_ERR "0 cold cp count %d\n",jh_in->b_cpcount, cold_jh->b_cpcount);
+		goto journal_block;
+	}
+	jbd_unlock_bh_state(bh_in);
 
 	new_bh = alloc_buffer_head(GFP_NOFS|__GFP_NOFAIL);
 
 	/* keep subsequent assertions sane */
-	atomic_set(&new_bh->b_count, 1);
+	/*atomic_set(&new_bh->b_count, 1);*/
+	cold_data = zj_alloc(bh_in->b_size, GFP_NOFS | __GFP_NOFAIL);
+	cold_jh = journal_alloc_zjournal_head();
 
 	jbd_lock_bh_state(bh_in);
 repeat:
@@ -402,14 +424,62 @@ repeat:
 	 * If a new transaction has already done a buffer copy-out, then
 	 * we use that version of the data for the commit.
 	 */
-	if (jh_in->b_frozen_data) {
-		done_copy_out = 1;
-		new_page = virt_to_page(jh_in->b_frozen_data);
-		new_offset = offset_in_page(jh_in->b_frozen_data);
-	} else {
-		new_page = jh2bh(jh_in)->b_page;
-		new_offset = offset_in_page(jh2bh(jh_in)->b_data);
+	/*if (jh_in->b_wcount) {*/
+		/*printk(KERN_ERR "wait\n");*/
+		/*set_buffer_metadirty(bh_in);*/
+		/*jbd_unlock_bh_state(bh_in);*/
+		/*wait_on_bit(&bh_in->b_state, BH_MetaDirty, TASK_UNINTERRUPTIBLE);*/
+		/*jbd_lock_bh_state(bh_in);*/
+		/*printk(KERN_ERR "wait end\n");*/
+
+		/*goto repeat;*/
+	/*}*/
+
+	done_copy_out = 1;
+	if (jh_in->b_transaction == NULL ||
+	jh_in->b_transaction != transaction) {
+		need_free = 1;
+		free_bh = new_bh;
+		free_jh = cold_jh;
+
+		J_ASSERT_JH(jh_in, jh_in->b_orig != NULL);
+		cold_jh = jh_in->b_orig;
+		new_bh = jh2bh(cold_jh);
+
+		// commit 시 write metadata 직전에 버퍼의 카운트를 하나 늘려주는데,
+		// 여기서는 write를 직접 내릴 대상이 orig에서 copy본으로 바꼈으므로
+		// count 관리가 필요하다.
+		atomic_dec(&bh_in->b_count);
+		atomic_inc(&new_bh->b_count);
+
+		/*printk(KERN_ERR "wr jh_in: %d/%d, in's orig: %d/%d, curr: %d/%d\n", jh_in->b_transaction->t_journal->j_core_id, jh_in->b_transaction->t_tid, jh_in->b_orig->b_transaction->t_journal->j_core_id, jh_in->b_orig->b_transaction->t_tid, transaction->t_journal->j_core_id, transaction->t_tid);*/
+		if (cold_jh->b_cpcount)
+			printk(KERN_ERR "1 cold cp count %d\n",jh_in->b_cpcount, cold_jh->b_cpcount);
+		goto journal_block;
 	}
+	/*printk(KERN_ERR "-1 bcount %d\n", atomic_read(&new_bh->b_count));*/
+	zj_shadow(bh_in, jh_in, cold_jh, new_bh, cold_data);
+
+	/*printk(KERN_ERR "0 bcount %d\n", atomic_read(&new_bh->b_count));*/
+	// commit 시 write metadata 직전에 버퍼의 카운트를 하나 늘려주는데,
+	// 여기서는 write를 직접 내릴 대상이 orig에서 copy본으로 바꼈으므로
+	// count 관리가 필요하다.
+	atomic_dec(&bh_in->b_count);
+	atomic_inc(&new_bh->b_count);
+	jh_in->b_cpcount++;
+	jh_in->b_transaction = NULL;
+	jh_in->b_jlist = BJ_None;
+	/*jh_in->b_jcount--;*/
+	if (cold_jh->b_cpcount)
+		printk(KERN_ERR "1.5 cold cp count %d\n",jh_in->b_cpcount, cold_jh->b_cpcount);
+
+	/*offset = offset_in_page(bh_in->b_data);*/
+	/*mapped_data = kmap_atomic(bh_in->b_page);*/
+	/*memcpy(cold_data, mapped_data + offset, bh_in->b_size);*/
+	/*kunmap_atomic(mapped_data);*/
+
+	new_page = virt_to_page(cold_data);
+	new_offset = offset_in_page(cold_data);
 
 	mapped_data = kmap_atomic(new_page);
 	/*
@@ -478,15 +548,20 @@ repeat:
 	}
 
 	set_bh_page(new_bh, new_page, new_offset);
-	new_bh->b_size = bh_in->b_size;
+
+	/*new_bh->b_private = bh_in;*/
+	/*new_bh->b_size = bh_in->b_size;*/
+
+journal_block:
 	new_bh->b_bdev = journal->j_dev;
 	new_bh->b_blocknr = blocknr;
-	new_bh->b_private = bh_in;
 	set_buffer_mapped(new_bh);
-	set_buffer_dirty(new_bh);
 
 	*bh_out = new_bh;
+	jbd_unlock_bh_state(bh_in);
+	jbd_lock_bh_state(new_bh);
 
+	/*set_buffer_shadow(jh2bh(cold_jh->b_orig));*/
 	/*
 	 * The to-be-written buffer needs to get moved to the io queue,
 	 * and the original buffer whose contents we are shadowing or
@@ -494,10 +569,22 @@ repeat:
 	 */
 	JBUFFER_TRACE(jh_in, "file as BJ_Shadow");
 	spin_lock(&journal->j_list_lock);
-	__zj_journal_file_buffer(jh_in, transaction, BJ_Shadow);
+	__zj_journal_file_buffer(cold_jh, transaction, BJ_Shadow);
 	spin_unlock(&journal->j_list_lock);
-	set_buffer_shadow(bh_in);
-	jbd_unlock_bh_state(bh_in);
+	/*set_buffer_shadow(bh_in);*/
+	if (cold_jh->b_cpcount)
+		printk(KERN_ERR "2 cold cp count %d\n", cold_jh->b_cpcount);
+
+	set_buffer_dirty(new_bh);
+	jbd_unlock_bh_state(new_bh);
+
+	if (need_free) {
+		zj_free(cold_data, bh_in->b_size);
+		/*__brelse(free_bh);*/
+		free_buffer_head(free_bh);
+		journal_free_zjournal_head(free_jh);
+	}
+	/*printk(KERN_ERR "1 bcount %d\n", atomic_read(&new_bh->b_count));*/
 
 	return do_escape | (done_copy_out << 1);
 }
@@ -2506,7 +2593,7 @@ static void zj_journal_destroy_zjournal_head_cache(void)
 /*
  * zjournal_head splicing and dicing
  */
-static struct zjournal_head *journal_alloc_zjournal_head(void)
+struct zjournal_head *journal_alloc_zjournal_head(void)
 {
 	struct zjournal_head *ret;
 
@@ -2523,7 +2610,7 @@ static struct zjournal_head *journal_alloc_zjournal_head(void)
 	return ret;
 }
 
-static void journal_free_zjournal_head(struct zjournal_head *jh)
+void journal_free_zjournal_head(struct zjournal_head *jh)
 {
 #ifdef CONFIG_ZJ_DEBUG
 	atomic_dec(&nr_zjournal_heads);

@@ -263,7 +263,7 @@ static int __try_to_free_cp_buf(struct zjournal_head *jh)
 	int ret = 0;
 	struct buffer_head *bh = jh2bh(jh);
 
-	if (jh->b_transaction == NULL && !buffer_locked(bh) &&
+	if (jh->b_transaction == NULL && jh->b_cpcount == 0 && !buffer_locked(bh) &&
 	    !buffer_dirty(bh) && !buffer_write_io_error(bh)) {
 		JBUFFER_TRACE(jh, "remove from checkpoint list");
 		ret = __zj_journal_remove_checkpoint(jh) + 1;
@@ -475,6 +475,22 @@ restart:
 			zj_log_wait_commit(jjournal, tid);
 			goto retry;
 		}
+		if (jh->b_cpcount) {
+			struct zjournal_head *commit_jh = jh->b_orig;
+			ztransaction_t *jtransaction = commit_jh->b_transaction;
+			if (!jtransaction)
+				printk(KERN_ERR "!jtransaction %d\n",jh->b_cpcount);
+			zjournal_t *jjournal = jtransaction->t_journal;
+			tid_t tid = jtransaction->t_tid;
+
+			transaction->t_chp_stats.cs_forced_to_close++;
+			spin_unlock(&journal->j_list_lock);
+
+			zj_log_start_commit(jjournal, tid);
+			zj_log_wait_commit(jjournal, tid);
+
+			goto retry;
+		}
 		// FIXME(jbddirty가 아니었던 녀석들도 여기 매달려 있는가?)
 		// real commit을 여기서 완료 해주었다면 dirty였을 새가 없을 것이고
 		// 그러므로 여기서 강제적인 checkpoint가 필요하다.
@@ -629,7 +645,8 @@ static void journal_dirty_one_cp_list(struct zjournal_head *jh)
 		next_jh = jh->b_cpnext;
 
 		if (jh->b_transaction != NULL ||
-		    jh->b_next_transaction != NULL)
+		    jh->b_next_transaction != NULL ||
+		    jh->b_cpcount != 0)
 			continue;
 
 		bh = jh2bh(jh);
@@ -832,6 +849,7 @@ int __zj_journal_remove_checkpoint(struct zjournal_head *jh)
 	JBUFFER_TRACE(jh, "removing from transaction");
 	__buffer_unlink(jh);
 	jh->b_cp_transaction = NULL;
+	clear_buffer_checkpoint(jh2bh(jh));
 	zj_journal_put_zjournal_head(jh);
 
 	if (transaction->t_checkpoint_list != NULL ||

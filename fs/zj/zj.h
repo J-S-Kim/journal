@@ -336,8 +336,10 @@ enum jbd_state_bits {
 	BH_State,		/* Pins most zjournal_head state */
 	BH_JournalHead,		/* Pins bh->b_private and jh->b_bh */
 	BH_Shadow,		/* IO on shadow buffer is running */
-	BH_Verified,		/* Metadata block has been verified ok */
-	BH_JBDPrivateStart,	/* First bit available for private use by FS */
+    BH_Verified,		/* Metadata block has been verified ok */
+    BH_MetaDirty,       /* Metadata block has been verified ok */
+    BH_Checkpoint,      /* Metadata block has been verified ok */
+    BH_JBDPrivateStart,	/* First bit available for private use by FS */
 };
 
 BUFFER_FNS(JBD, jbd)
@@ -351,6 +353,8 @@ TAS_BUFFER_FNS(RevokeValid, revokevalid)
 BUFFER_FNS(Freed, freed)
 BUFFER_FNS(Shadow, shadow)
 BUFFER_FNS(Verified, verified)
+BUFFER_FNS(MetaDirty, metadirty)
+BUFFER_FNS(Checkpoint, checkpoint)
 
 static inline struct buffer_head *jh2bh(struct zjournal_head *jh)
 {
@@ -1500,6 +1504,11 @@ extern int	   zj_journal_revoke (handle_t *, unsigned long long, struct buffer_h
 extern int	   zj_journal_cancel_revoke(handle_t *, struct zjournal_head *);
 extern void	   zj_journal_write_revoke_records(ztransaction_t *transaction,
 						     struct list_head *log_bufs);
+
+extern struct zjournal_head *journal_alloc_zjournal_head(void);
+extern void journal_free_zjournal_head(struct zjournal_head *jh);
+extern void zj_shadow(struct buffer_head *orig_bh, struct zjournal_head *orig_jh,
+                struct zjournal_head *jh, struct buffer_head *bh, char *data);
 
 /* Recovery revoke support */
 extern int	zj_journal_set_revoke(zjournal_t *, unsigned long long, tid_t);
