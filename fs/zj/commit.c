@@ -34,7 +34,17 @@
  */
 static void journal_end_buffer_io_sync(struct buffer_head *bh, int uptodate)
 {
-	struct buffer_head *orig_bh = bh->b_private;
+	struct zjournal_head *jh = bh2jh(bh);
+	struct zjournal_head *orig_jh = NULL;
+	struct buffer_head *orig_bh = NULL;
+
+	if (jh)
+		orig_jh = jh->b_orig;
+
+	if (orig_jh)
+		orig_bh = jh2bh(orig_jh);
+	else
+		orig_bh = bh->b_private;
 
 	BUFFER_TRACE(bh, "");
 	if (uptodate)
@@ -42,9 +52,10 @@ static void journal_end_buffer_io_sync(struct buffer_head *bh, int uptodate)
 	else
 		clear_buffer_uptodate(bh);
 	if (orig_bh) {
-		clear_bit_unlock(BH_Shadow, &orig_bh->b_state);
+		clear_bit_unlock(BH_Shadow, &bh->b_state);
+		/*clear_bit_unlock(BH_Shadow, &orig_bh->b_state);*/
 		smp_mb__after_atomic();
-		wake_up_bit(&orig_bh->b_state, BH_Shadow);
+		/*wake_up_bit(&orig_bh->b_state, BH_Shadow);*/
 	}
 	unlock_buffer(bh);
 }
@@ -583,22 +594,9 @@ void zj_journal_commit_transaction(zjournal_t *journal)
 		atomic_read(&commit_transaction->t_outstanding_credits);
 	stats.run.rs_blocks_logged = 0;
 
-	/*printk(KERN_ERR "journal: %d, tid:%d, %d, %d\n", journal->j_core_id, commit_transaction->t_tid, commit_transaction->t_nr_buffers, atomic_read(&commit_transaction->t_outstanding_credits));*/
 	J_ASSERT(commit_transaction->t_nr_buffers <=
 		 atomic_read(&commit_transaction->t_outstanding_credits));
 
-	while (atomic_read(&commit_transaction->t_nexts)) {
-		DEFINE_WAIT(wait);
-
-		prepare_to_wait(&journal->j_wait_nexts, &wait,
-					TASK_UNINTERRUPTIBLE);
-		if (atomic_read(&commit_transaction->t_nexts)) {
-			/*printk(KERN_ERR "Wait next journal: %d, tid: %d, nexts: %d\n", journal->j_core_id, commit_transaction->t_tid, atomic_read(&commit_transaction->t_nexts));*/
-			schedule();
-			/*printk(KERN_ERR "Wait next journal: %d, tid: %d, nexts: %d end\n", journal->j_core_id, commit_transaction->t_tid, atomic_read(&commit_transaction->t_nexts));*/
-		}
-		finish_wait(&journal->j_wait_nexts, &wait);
-	}
 	err = 0;
 	bufs = 0;
 	descriptor = NULL;
@@ -837,6 +835,8 @@ start_journal_io:
 		struct buffer_head *bh = list_entry(io_bufs.prev,
 						    struct buffer_head,
 						    b_assoc_buffers);
+		struct buffer_head *orig_bh;
+		struct zjournal_head *orig_jh;
 
 		wait_on_buffer(bh);
 		cond_resched();
@@ -845,20 +845,31 @@ start_journal_io:
 			err = -EIO;
 		zj_unfile_log_bh(bh);
 
+		/*printk(KERN_ERR "2 bcount %d\n", atomic_read(&bh->b_count));*/
 		/*
 		 * The list contains temporary buffer heads created by
 		 * zj_journal_write_metadata_buffer().
 		 */
-		BUFFER_TRACE(bh, "dumping temporary bh");
+		/*BUFFER_TRACE(bh, "dumping temporary bh");*/
 		__brelse(bh);
-		J_ASSERT_BH(bh, atomic_read(&bh->b_count) == 0);
-		free_buffer_head(bh);
+		/*J_ASSERT_BH(bh, atomic_read(&bh->b_count) == 0);*/
+		/*zj_free(bh->b_data, bh->b_size);*/
+		/*free_buffer_head(bh);*/
 
 		/* We also have to refile the corresponding shadowed buffer */
 		jh = commit_transaction->t_shadow_list->b_tprev;
 		bh = jh2bh(jh);
+
+		orig_jh = jh->b_orig;
+		orig_bh = jh2bh(orig_jh);
+
 		clear_buffer_jwrite(bh);
-		J_ASSERT_BH(bh, buffer_jbddirty(bh));
+		clear_buffer_jwrite(orig_bh);
+		if (!buffer_jbddirty(orig_bh)) {
+			printk(KERN_ERR "not dirty tnext: %p, cpnext: %p, shadow: %d, cpcount %d\n", orig_jh->b_tnext,  orig_jh->b_cpnext, buffer_shadow(orig_bh), orig_jh->b_cpcount);
+			
+		}
+		J_ASSERT_BH(bh, buffer_jbddirty(orig_bh));
 		J_ASSERT_BH(bh, !buffer_shadow(bh));
 
 		/* The metadata is now released for reuse, but we need
@@ -869,6 +880,10 @@ start_journal_io:
 		zj_journal_file_buffer(jh, commit_transaction, BJ_Forget);
 		JBUFFER_TRACE(jh, "brelse shadowed buffer");
 		__brelse(bh);
+		zj_free(bh->b_data, bh->b_size);
+		if (!list_empty(&bh->b_assoc_buffers))
+			printk(KERN_ERR "%p\n", bh);
+		free_buffer_head(bh);
 	}
 
 	J_ASSERT (commit_transaction->t_shadow_list == NULL);
@@ -980,18 +995,22 @@ restart_loop:
 	while (commit_transaction->t_forget) {
 		ztransaction_t *cp_transaction;
 		zjournal_t *cp_journal;
-		struct buffer_head *bh;
+		struct buffer_head *orig_bh;
+		struct zjournal_head *orig_jh;
 		int try_to_free = 0;
 
 		jh = commit_transaction->t_forget;
 		spin_unlock(&journal->j_list_lock);
-		bh = jh2bh(jh);
+		/*bh = jh2bh(jh);*/
+
+		orig_jh = jh->b_orig;
+		orig_bh = jh2bh(orig_jh);
 		/*
 		 * Get a reference so that bh cannot be freed before we are
 		 * done with it.
 		 */
-		get_bh(bh);
-		jbd_lock_bh_state(bh);
+		get_bh(orig_bh);
+		jbd_lock_bh_state(orig_bh);
 		J_ASSERT_JH(jh,	jh->b_transaction == commit_transaction);
 
 		/*
@@ -1007,31 +1026,31 @@ restart_loop:
 		 * We also know that the frozen data has already fired
 		 * its triggers if they exist, so we can clear that too.
 		 */
-		if (jh->b_committed_data) {
-			zj_free(jh->b_committed_data, bh->b_size);
-			jh->b_committed_data = NULL;
-			if (jh->b_frozen_data) {
-				jh->b_committed_data = jh->b_frozen_data;
-				jh->b_frozen_data = NULL;
-				jh->b_frozen_triggers = NULL;
+		if (orig_jh->b_committed_data) {
+			zj_free(orig_jh->b_committed_data, orig_bh->b_size);
+			orig_jh->b_committed_data = NULL;
+			if (orig_jh->b_frozen_data) {
+				orig_jh->b_committed_data = orig_jh->b_frozen_data;
+				orig_jh->b_frozen_data = NULL;
+				orig_jh->b_frozen_triggers = NULL;
 			}
-		} else if (jh->b_frozen_data) {
-			zj_free(jh->b_frozen_data, bh->b_size);
-			jh->b_frozen_data = NULL;
-			jh->b_frozen_triggers = NULL;
+		} else if (orig_jh->b_frozen_data) {
+			zj_free(orig_jh->b_frozen_data, orig_bh->b_size);
+			orig_jh->b_frozen_data = NULL;
+			orig_jh->b_frozen_triggers = NULL;
 		}
 
 		spin_lock(&journal->j_list_lock);
-		cp_transaction = jh->b_cp_transaction;
+		cp_transaction = orig_jh->b_cp_transaction;
 		if (cp_transaction) {
 			cp_journal = cp_transaction->t_journal;
-			JBUFFER_TRACE(jh, "remove from old cp transaction");
+			JBUFFER_TRACE(orig_jh, "remove from old cp transaction");
 			cp_transaction->t_chp_stats.cs_dropped++;
 			if (journal != cp_journal) {
 				spin_unlock(&journal->j_list_lock);
 				spin_lock(&cp_journal->j_list_lock);
 			}
-			__zj_journal_remove_checkpoint(jh);
+			__zj_journal_remove_checkpoint(orig_jh);
 			if (journal != cp_journal) {
 				spin_unlock(&cp_journal->j_list_lock);
 				spin_lock(&journal->j_list_lock);
@@ -1048,7 +1067,7 @@ restart_loop:
 		* A buffer which has been freed while still being journaled by
 		* a previous transaction.
 		*/
-		if (buffer_freed(bh)) {
+		if (buffer_freed(orig_bh)) {
 			/*
 			 * If the running transaction is the one containing
 			 * "add to orphan" operation (b_next_transaction !=
@@ -1064,24 +1083,25 @@ restart_loop:
 			 * pagesize and it is attached to the last partial
 			 * page.
 			 */
-			jh->b_modified = 0;
-			if (!jh->b_next_transaction) {
-				clear_buffer_freed(bh);
-				clear_buffer_jbddirty(bh);
-				clear_buffer_mapped(bh);
-				clear_buffer_new(bh);
-				clear_buffer_req(bh);
-				bh->b_bdev = NULL;
+			orig_jh->b_modified = 0;
+			if (!orig_jh->b_next_transaction) {
+				clear_buffer_freed(orig_bh);
+				clear_buffer_jbddirty(orig_bh);
+				clear_buffer_mapped(orig_bh);
+				clear_buffer_new(orig_bh);
+				clear_buffer_req(orig_bh);
+				orig_bh->b_bdev = NULL;
 			}
 		}
 
-		if (buffer_jbddirty(bh)) {
-			JBUFFER_TRACE(jh, "add to new checkpointing trans");
-			__zj_journal_insert_checkpoint(jh, commit_transaction);
+		if (buffer_jbddirty(orig_bh)) {
+			JBUFFER_TRACE(orig_jh, "add to new checkpointing trans");
+			set_buffer_checkpoint(orig_bh);
+			__zj_journal_insert_checkpoint(orig_jh, commit_transaction);
 			if (is_journal_aborted(journal))
-				clear_buffer_jbddirty(bh);
+				clear_buffer_jbddirty(orig_bh);
 		} else {
-			J_ASSERT_BH(bh, !buffer_dirty(bh));
+			J_ASSERT_BH(orig_bh, !buffer_dirty(orig_bh));
 			/*
 			 * The buffer on BJ_Forget list and not jbddirty means
 			 * it has been freed by this transaction and hence it
@@ -1091,16 +1111,44 @@ restart_loop:
 			 * disk and before we process the buffer on BJ_Forget
 			 * list.
 			 */
-			if (!jh->b_next_transaction)
+			if (!orig_jh->b_transaction)
 				try_to_free = 1;
 		}
-		JBUFFER_TRACE(jh, "refile or unfile buffer");
-		__zj_journal_refile_buffer(jh);
-		jbd_unlock_bh_state(bh);
+
+		JBUFFER_TRACE(orig_jh, "refile or unfile buffer");
+
+		//unlink & free shadow jh
+		clear_buffer_shadow(orig_bh);
+		--orig_jh->b_cpcount;
+
+		if (commit_transaction->t_forget == jh) {
+			commit_transaction->t_forget = jh->b_tnext;
+			if (commit_transaction->t_forget == jh)
+				commit_transaction->t_forget = NULL;
+		}
+		jh->b_tprev->b_tnext = jh->b_tnext;
+		jh->b_tnext->b_tprev = jh->b_tprev;
+
+		if (orig_jh->b_orig == jh)
+			orig_jh->b_orig = NULL;
+
+		--jh->b_jcount;
+		journal_free_zjournal_head(jh);
+
+		/*__zj_journal_refile_buffer(orig_jh);*/
+		if (orig_jh->b_transaction == NULL && !orig_jh->b_cpcount && 
+				test_clear_buffer_jbddirty(orig_bh)) {
+			mark_buffer_dirty(orig_bh);	/* Expose it to the VM */
+			zj_journal_put_zjournal_head(orig_jh);
+		}
+
+		jbd_unlock_bh_state(orig_bh);
+
 		if (try_to_free)
-			release_buffer_page(bh);	/* Drops bh reference */
-		else
-			__brelse(bh);
+			release_buffer_page(orig_bh);	/* Drops bh reference */
+		else {
+			__brelse(orig_bh);
+		}
 		cond_resched_lock(&journal->j_list_lock);
 	}
 	spin_unlock(&journal->j_list_lock);

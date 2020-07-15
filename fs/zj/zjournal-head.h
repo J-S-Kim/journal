@@ -28,6 +28,8 @@ struct zjournal_head {
 	 * [jbd_lock_bh_zjournal_head()]
 	 */
 	int b_jcount;
+    int b_cpcount;
+    //int b_wcount;
 
     struct zj_journal_handle *modified_handle;
 	/*
@@ -82,7 +84,8 @@ struct zjournal_head {
 	 * Doubly-linked list of buffers on a transaction's data, metadata or
 	 * forget queue. [t_list_lock] [jbd_lock_bh_state()]
 	 */
-	struct zjournal_head *b_tnext, *b_tprev;
+    struct zjournal_head *b_tnext, *b_tprev;
+    struct zjournal_head *b_orig;
 
 	/*
 	 * Pointer to the compound transaction against which this buffer

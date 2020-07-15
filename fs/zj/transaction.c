@@ -445,7 +445,7 @@ handle_t *zj__journal_start(zjournal_t *journal, int nblocks, int rsv_blocks,
 		return ERR_PTR(-EROFS);
 
 	if (handle) {
-		J_ASSERT(handle->h_transaction->t_journal == journal);
+		/*J_ASSERT(handle->h_transaction->t_journal == journal);*/
 		handle->h_ref++;
 		return handle;
 	}
@@ -838,6 +838,55 @@ static void zj_freeze_jh_data(struct zjournal_head *jh)
 	jh->b_frozen_triggers = jh->b_triggers;
 }
 
+void zj_shadow(struct buffer_head *orig_bh, struct zjournal_head *orig_jh,
+		struct zjournal_head *jh, struct buffer_head *bh, char *data) 
+{
+	struct zjournal_head **list;
+	ztransaction_t *transaction = orig_jh->b_transaction;
+	zjournal_t *journal = transaction->t_journal;
+	struct page *page, *new_page;
+	int offset, new_offset;
+	char *source;
+
+	//copy data
+	page = orig_bh->b_page;
+	offset = offset_in_page(orig_bh->b_data);
+	source = kmap_atomic(page);
+	memcpy(data, source + offset, orig_bh->b_size);
+	kunmap_atomic(source);
+
+	//link data to bh
+	new_page = virt_to_page(data);
+	new_offset = offset_in_page(data);
+	set_bh_page(bh, new_page, new_offset);
+	bh->b_size = orig_bh->b_size;
+
+	//link bh to jh
+	set_buffer_jbd(bh);
+	bh->b_private = jh;
+	jh->b_bh = bh;
+	get_bh(bh);
+	jh->b_jcount++;
+
+	//replace Metadata list orig_jh <-> jh
+	spin_lock(&journal->j_list_lock);
+	list = &orig_jh->b_transaction->t_buffers;
+	if (*list == orig_jh) {
+		*list = jh;
+	}
+	jh->b_tnext = orig_jh->b_tnext;
+	jh->b_tnext->b_tprev = jh;
+	jh->b_tprev = orig_jh->b_tprev;
+	jh->b_tprev->b_tnext = jh;
+	orig_jh->b_tnext = orig_jh->b_tprev = NULL;
+	spin_unlock(&journal->j_list_lock);
+
+	jh->b_jlist = BJ_Metadata;
+	jh->b_transaction = transaction;
+	jh->b_orig = orig_jh;
+	orig_jh->b_orig = jh;
+}
+
 static inline void add_commit_mark_two_side(zjournal_t *journal, ztransaction_t *transaction, 
 						zjournal_t *jjournal, ztransaction_t *jtransaction) 
 {
@@ -907,7 +956,8 @@ static int
 do_get_write_access(handle_t *handle, struct zjournal_head *jh,
 			int force_copy)
 {
-	struct buffer_head *bh;
+	struct buffer_head *bh, *frozen_bh = NULL;
+	struct zjournal_head *frozen_jh = NULL; 
 	ztransaction_t *transaction = handle->h_transaction;
 	zjournal_t *journal;
 	int error;
@@ -1005,6 +1055,7 @@ repeat:
 		JBUFFER_TRACE(jh, "no transaction");
 		J_ASSERT_JH(jh, !jh->b_next_transaction);
 		JBUFFER_TRACE(jh, "file as BJ_Reserved");
+		/*J_ASSERT_JH(jh, !jh->b_wcount);*/
 		/*
 		 * Make sure all stores to jh (b_modified, b_frozen_data) are
 		 * visible before attaching it to the running transaction.
@@ -1022,37 +1073,22 @@ repeat:
 		zjournal_t *jjournal = jtransaction->t_journal;
 
 		read_lock(&jjournal->j_state_lock);
-		if (jtransaction->t_state < T_COMMIT) {
+		if (jtransaction->t_state <= T_LOCKED) {
 			read_unlock(&jjournal->j_state_lock);
 			//add two side
 			add_commit_mark_two_side(journal, transaction, jjournal, jtransaction);
 			goto done;
 		} else {
 			read_unlock(&jjournal->j_state_lock);
-			//add only mine
 			add_commit_mark_only_mine(journal, transaction, jjournal, jtransaction);
-		}
-
-		jtransaction = jh->b_next_transaction;
-		if (jtransaction) {
-			jjournal = jtransaction->t_journal;
-
-			read_lock(&jjournal->j_state_lock);
-			if (jtransaction->t_state < T_COMMIT) {
-				read_unlock(&jjournal->j_state_lock);
-				//add two side
-				add_commit_mark_two_side(journal, transaction, jjournal, jtransaction);
-
-			} else {
-				read_unlock(&jjournal->j_state_lock);
-				//add only mine
-				//add_commit_mark_only_mine(journal, transaction, jjournal, jtransaction);
-				//TODO
-				/*printk(KERN_ERR "Repeat do get write\n");*/
-				jbd_unlock_bh_state(bh);
-				goto repeat;
-			}
-			goto done;
+			/*if (jh->b_wcount) {*/
+				/*printk(KERN_ERR "wait\n");*/
+				/*set_buffer_metadirty(bh);*/
+				/*jbd_unlock_bh_state(bh);*/
+				/*wait_on_bit(&bh->b_state, BH_MetaDirty, TASK_UNINTERRUPTIBLE);*/
+				/*printk(KERN_ERR "wait end\n");*/
+				/*goto repeat;*/
+			/*}*/
 		}
 	}
 
@@ -1070,34 +1106,7 @@ repeat:
 	/*J_ASSERT_JH(jh, jh->b_next_transaction == NULL);*/
 	/*J_ASSERT_JH(jh, jh->b_transaction == journal->j_committing_transaction);*/
 
-	/*
-	 * There is one case we have to be very careful about.  If the
-	 * committing transaction is currently writing this buffer out to disk
-	 * and has NOT made a copy-out, then we cannot modify the buffer
-	 * contents at all right now.  The essence of copy-out is that it is
-	 * the extra copy, not the primary copy, which gets journaled.  If the
-	 * primary copy is already going to disk then we cannot do copy-out
-	 * here.
-	 */
-	if (buffer_shadow(bh)) {
-		JBUFFER_TRACE(jh, "on shadow: sleep");
-		jbd_unlock_bh_state(bh);
-		wait_on_bit_io(&bh->b_state, BH_Shadow, TASK_UNINTERRUPTIBLE);
-		goto repeat;
-	}
 
-	/*
-	 * Only do the copy if the currently-owning transaction still needs it.
-	 * If buffer isn't on BJ_Metadata list, the committing transaction is
-	 * past that stage (here we use the fact that BH_Shadow is set under
-	 * bh_state lock together with refiling to BJ_Shadow list and at this
-	 * point we know the buffer doesn't have BH_Shadow set).
-	 *
-	 * Subtle point, though: if this is a get_undo_access, then we will be
-	 * relying on the frozen_data to contain the new value of the
-	 * committed_data record after the transaction, so we HAVE to force the
-	 * frozen_data copy in that case.
-	 */
 	if (jh->b_jlist == BJ_Metadata || force_copy) {
 		JBUFFER_TRACE(jh, "generate frozen data");
 		if (!frozen_buffer) {
@@ -1105,12 +1114,24 @@ repeat:
 			jbd_unlock_bh_state(bh);
 			frozen_buffer = zj_alloc(jh2bh(jh)->b_size,
 						   GFP_NOFS | __GFP_NOFAIL);
+			frozen_jh = journal_alloc_zjournal_head();
+			frozen_bh = alloc_buffer_head(GFP_NOFS|__GFP_NOFAIL);
+			/*atomic_set(&frozen_bh, 1);*/
+
 			goto repeat;
 		}
-		jh->b_frozen_data = frozen_buffer;
+
+		zj_shadow(bh, jh, frozen_jh, frozen_bh, frozen_buffer);
+
+		J_ASSERT_BH(bh, buffer_jbddirty(bh));
+		set_buffer_shadow(frozen_bh);
+		set_buffer_jbddirty(frozen_bh);
+
 		frozen_buffer = NULL;
-		zj_freeze_jh_data(jh);
+		frozen_bh = NULL;
+		frozen_jh = NULL;
 	}
+
 attach_next:
 	/*
 	 * Make sure all stores to jh (b_modified, b_frozen_data) are visible
@@ -1120,10 +1141,19 @@ attach_next:
 	smp_wmb();
 	jh->b_modified = 0;
 	jh->modified_handle = handle;
-	jh->b_next_transaction = transaction;
-	atomic_inc(&transaction->t_nexts);
+
+	jh->b_cpcount++;
+	jh->b_transaction = NULL;
+	jh->b_jlist = BJ_None;
+	/*jh->b_jcount--;*/
+
+	/*J_ASSERT_JH(jh, !jh->b_wcount);*/
+	spin_lock(&journal->j_list_lock);
+	__zj_journal_file_buffer(jh, transaction, BJ_Reserved);
+	spin_unlock(&journal->j_list_lock);
 
 done:
+	/*++jh->b_wcount;*/
 	jbd_unlock_bh_state(bh);
 
 	/*
@@ -1135,6 +1165,12 @@ done:
 out:
 	if (unlikely(frozen_buffer))	/* It's usually NULL */
 		zj_free(frozen_buffer, bh->b_size);
+	if (unlikely(frozen_bh)) {
+		/*__brelse(frozen_bh);*/
+		free_buffer_head(frozen_bh);
+	}
+	if (unlikely(frozen_jh)) 
+		journal_free_zjournal_head(frozen_jh);
 
 	JBUFFER_TRACE(jh, "exit");
 	return error;
@@ -1285,21 +1321,22 @@ int zj_journal_get_create_access(handle_t *handle, struct buffer_head *bh)
 		/* first access by this transaction */
 		jh->b_modified = 0;
 		jh->modified_handle = handle;
+		/*J_ASSERT_JH(jh, !jh->b_wcount);*/
 
 		JBUFFER_TRACE(jh, "file as BJ_Reserved");
 		spin_lock(&journal->j_list_lock);
 		__zj_journal_file_buffer(jh, transaction, BJ_Reserved);
 		spin_unlock(&journal->j_list_lock);
-	} else if (jh->b_transaction->t_state > T_COMMIT) {
+	} else if (jh->b_transaction->t_state > T_LOCKED) {
 		/* first access by this transaction */
 		jh->b_modified = 0;
 		jh->modified_handle = handle;
+		printk(KERN_ERR "create access\n");
 
-		JBUFFER_TRACE(jh, "set next transaction");
-		spin_lock(&journal->j_list_lock);
-		jh->b_next_transaction = transaction;
-		atomic_inc(&transaction->t_nexts);
-		spin_unlock(&journal->j_list_lock);
+		/*JBUFFER_TRACE(jh, "set next transaction");*/
+		/*spin_lock(&journal->j_list_lock);*/
+		/*jh->b_next_transaction = transaction;*/
+		/*spin_unlock(&journal->j_list_lock);*/
 	}
 	jbd_unlock_bh_state(bh);
 
@@ -1464,10 +1501,13 @@ int zj_journal_dirty_metadata(handle_t *handle, struct buffer_head *bh)
 
 	if (is_handle_aborted(handle))
 		return -EROFS;
+
+	jbd_lock_bh_state(bh);
+
 	if (!buffer_jbd(bh)) {
-		printk(KERN_ERR "NO JH\n");
+		printk(KERN_ERR "%p, shadow: %d, checkpoint: %d\n", bh2jh(bh), buffer_shadow(bh), buffer_checkpoint(bh));
 		ret = -EUCLEAN;
-		goto out;
+		goto out_unlock_bh;
 	}
 	/*
 	 * We don't grab jh reference here since the buffer must be part
@@ -1487,6 +1527,18 @@ int zj_journal_dirty_metadata(handle_t *handle, struct buffer_head *bh)
 				/*jh->b_next_transaction == transaction);*/
 		/*jbd_unlock_bh_state(bh);*/
 	/*}*/
+
+	/*J_ASSERT_JH(jh, jh->b_wcount > 0);*/
+
+	/*if (jh->b_wcount)*/
+		/*--jh->b_wcount;*/
+
+	/*if (!jh->b_wcount && buffer_metadirty(bh)) {*/
+		/*clear_bit_unlock(BH_MetaDirty, &bh->b_state);*/
+		/*smp_mb__after_atomic();*/
+		/*wake_up_bit(&bh->b_state, BH_MetaDirty);*/
+	/*}*/
+
 	if (jh->b_modified == 1) {
 		/* If it's in our transaction it must be in BJ_Metadata list. */
 		/*if (jh->b_transaction == transaction &&*/
@@ -1503,14 +1555,12 @@ int zj_journal_dirty_metadata(handle_t *handle, struct buffer_head *bh)
 					/*jh->b_jlist == BJ_Metadata);*/
 			/*jbd_unlock_bh_state(bh);*/
 		/*}*/
-		goto out;
+		goto out_unlock_bh;
 	}
 
 	journal = transaction->t_journal;
 	jbd_debug(5, "zjournal_head %p\n", jh);
 	JBUFFER_TRACE(jh, "entry");
-
-	jbd_lock_bh_state(bh);
 
 	if (jh->b_modified == 0
 		&& handle == jh->modified_handle) {
@@ -1600,7 +1650,6 @@ int zj_journal_dirty_metadata(handle_t *handle, struct buffer_head *bh)
 	spin_unlock(&journal->j_list_lock);
 out_unlock_bh:
 	jbd_unlock_bh_state(bh);
-out:
 	JBUFFER_TRACE(jh, "exit");
 	return ret;
 }
@@ -2504,6 +2553,10 @@ void __zj_journal_file_buffer(struct zjournal_head *jh,
 	J_ASSERT_JH(jh, jbd_is_locked_bh_state(bh));
 	assert_spin_locked(&transaction->t_journal->j_list_lock);
 
+	if (jh->b_transaction && jh->b_transaction != transaction) {
+		printk(KERN_ERR "cur: %d/%d, commit: %d/%d\n", jh->b_transaction->t_journal->j_core_id, jh->b_transaction->t_tid, transaction->t_journal->j_core_id, transaction->t_tid);
+		printk(KERN_ERR "cpnext: %p, shadow: %d, cpcount %d\n",  jh->b_cpnext, buffer_shadow(bh), jh->b_cpcount);
+	}
 	J_ASSERT_JH(jh, jh->b_jlist < BJ_Types);
 	J_ASSERT_JH(jh, jh->b_transaction == transaction ||
 				jh->b_transaction == NULL);
@@ -2637,13 +2690,6 @@ void __zj_journal_refile_buffer(struct zjournal_head *jh)
 		spin_unlock(&jh->b_transaction->t_journal->j_list_lock);
 		spin_lock(&old_transaction->t_journal->j_list_lock);
 	}
-
-	/*printk(KERN_ERR "refile jlist: %d, journal: %d, tid: %d\n", jlist, jh->b_transaction->t_journal->j_core_id, jh->b_transaction->t_tid);*/
-	/*J_ASSERT_JH(jh, jh->b_transaction->t_state == T_RUNNING);*/
-	if (atomic_read(&jh->b_transaction->t_nexts) &&
-			atomic_dec_and_test(&jh->b_transaction->t_nexts))
-		wake_up(&jh->b_transaction->t_journal->j_wait_nexts);
-	
 
 	if (was_dirty)
 		set_buffer_jbddirty(bh);
