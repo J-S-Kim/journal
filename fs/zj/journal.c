@@ -374,7 +374,7 @@ int zj_journal_write_metadata_buffer(ztransaction_t *transaction,
 				  struct buffer_head **bh_out,
 				  sector_t blocknr)
 {
-	int need_copy_out = 0, need_free = 0;
+	int need_copy_out = 0, need_free = 0, free_out = 0;
 	int done_copy_out = 0;
 	int do_escape = 0;
 	char *mapped_data, *cold_data;
@@ -384,6 +384,11 @@ int zj_journal_write_metadata_buffer(ztransaction_t *transaction,
 	unsigned int new_offset, offset;
 	struct buffer_head *bh_in = jh2bh(jh_in);
 	zjournal_t *journal = transaction->t_journal;
+	struct buffer_head *orig_bh;
+	struct zjournal_head *orig_jh;
+#ifdef ZJ_PROFILE
+	unsigned long start_time, end_time;
+#endif
 
 	/*
 	 * The buffer really shouldn't be locked: only the current committing
@@ -395,6 +400,7 @@ int zj_journal_write_metadata_buffer(ztransaction_t *transaction,
 	 * decided to launch a writepage() against this buffer.
 	 */
 	jbd_lock_bh_state(bh_in);
+	smp_mb();
 	/*if (!buffer_jbddirty(bh_in)) {*/
 		/*printk(KERN_ERR "tnext: %p, cpnext: %p, shadow: %d, cpcount %d\n", jh_in->b_tnext, jh_in->b_cpnext, buffer_shadow(bh_in), jh_in->b_cpcount);*/
 	/*}*/
@@ -410,6 +416,9 @@ int zj_journal_write_metadata_buffer(ztransaction_t *transaction,
 		goto journal_block;
 	}
 	jbd_unlock_bh_state(bh_in);
+#ifdef ZJ_PROFILE
+	start_time = jiffies;
+#endif
 
 	new_bh = alloc_buffer_head(GFP_NOFS|__GFP_NOFAIL);
 
@@ -417,6 +426,14 @@ int zj_journal_write_metadata_buffer(ztransaction_t *transaction,
 	/*atomic_set(&new_bh->b_count, 1);*/
 	cold_data = zj_alloc(bh_in->b_size, GFP_NOFS | __GFP_NOFAIL);
 	cold_jh = journal_alloc_zjournal_head();
+
+#ifdef ZJ_PROFILE
+	end_time = jiffies;
+	spin_lock(&journal->j_ov_lock);
+	journal->j_ov_stats.zj_copy_time2 += zj_time_diff(start_time, end_time);
+	journal->j_ov_stats.zj_copy_page2 ++;
+	spin_unlock(&journal->j_ov_lock);
+#endif
 
 	jbd_lock_bh_state(bh_in);
 repeat:
@@ -442,9 +459,20 @@ repeat:
 		free_bh = new_bh;
 		free_jh = cold_jh;
 
+		if (jh_in->b_orig == NULL) {
+			free_out = 1;
+			jbd_unlock_bh_state(bh_in);
+			goto free;
+		}
 		J_ASSERT_JH(jh_in, jh_in->b_orig != NULL);
 		cold_jh = jh_in->b_orig;
 		new_bh = jh2bh(cold_jh);
+
+		if (cold_jh->b_transaction != transaction) {
+			free_out = 1;
+			jbd_unlock_bh_state(bh_in);
+			goto free;
+		}
 
 		// commit 시 write metadata 직전에 버퍼의 카운트를 하나 늘려주는데,
 		// 여기서는 write를 직접 내릴 대상이 orig에서 copy본으로 바꼈으므로
@@ -458,7 +486,7 @@ repeat:
 		goto journal_block;
 	}
 	/*printk(KERN_ERR "-1 bcount %d\n", atomic_read(&new_bh->b_count));*/
-	zj_shadow(bh_in, jh_in, cold_jh, new_bh, cold_data);
+	zj_shadow(bh_in, jh_in, cold_jh, new_bh, cold_data, 1);
 
 	/*printk(KERN_ERR "0 bcount %d\n", atomic_read(&new_bh->b_count));*/
 	// commit 시 write metadata 직전에 버퍼의 카운트를 하나 늘려주는데,
@@ -578,7 +606,16 @@ journal_block:
 	set_buffer_dirty(new_bh);
 	jbd_unlock_bh_state(new_bh);
 
+	orig_jh = cold_jh->b_orig;
+	orig_bh = jh2bh(orig_jh);
+
+	/*if (orig_jh->b_transaction && !buffer_jbddirty(orig_bh)) {*/
+		/*printk(KERN_ERR "// not dirty tnext: %p, cpnext: %p, shadow: %d, cpcount %d, dirty: %d, jlist: %d\n", orig_jh->b_tnext,  orig_jh->b_cpnext, buffer_shadow(orig_bh), orig_jh->b_cpcount, buffer_dirty(orig_bh), orig_jh->b_jlist);*/
+	/*}*/
+
+
 	if (need_free) {
+free:
 		zj_free(cold_data, bh_in->b_size);
 		/*__brelse(free_bh);*/
 		free_buffer_head(free_bh);
@@ -586,7 +623,7 @@ journal_block:
 	}
 	/*printk(KERN_ERR "1 bcount %d\n", atomic_read(&new_bh->b_count));*/
 
-	return do_escape | (done_copy_out << 1);
+	return do_escape | (done_copy_out << 1) | (free_out << 2);
 }
 
 /*
@@ -1104,6 +1141,32 @@ struct zj_stats_proc_session {
 	int max;
 };
 
+#ifdef ZJ_PROFILE
+struct zj_ov_proc_session {
+	zjournal_t *journal;
+	struct zjournal_overhead *ovs;
+	int start;
+	int max;
+};
+
+static int zj_seq_ov_show(struct seq_file *seq, void *v)
+{
+	struct zj_ov_proc_session *s = seq->private;
+
+	if (v != SEQ_START_TOKEN)
+		return 0;
+
+	seq_printf(seq, "  %u  %d %u %d (copy1, page1, copy2, page2)\n",
+			jiffies_to_msecs(s->ovs->zj_copy_time1), s->ovs->zj_copy_page1,
+			jiffies_to_msecs(s->ovs->zj_copy_time2), s->ovs->zj_copy_page2);
+	seq_printf(seq, "  %u  %d %u %d (wait1, page1, wait2, page2)\n",
+			jiffies_to_msecs(s->ovs->zj_wait_time1), s->ovs->zj_wait_page1,
+			jiffies_to_msecs(s->ovs->zj_wait_time2), s->ovs->zj_wait_page2);
+
+	return 0;
+}
+#endif
+
 static void *zj_seq_info_start(struct seq_file *seq, loff_t *pos)
 {
 	return *pos ? NULL : SEQ_START_TOKEN;
@@ -1162,6 +1225,64 @@ static const struct seq_operations zj_seq_info_ops = {
 	.show   = zj_seq_info_show,
 };
 
+#ifdef ZJ_PROFILE
+static const struct seq_operations zj_seq_ov_ops = {
+	.start  = zj_seq_info_start,
+	.next   = zj_seq_info_next,
+	.stop   = zj_seq_info_stop,
+	.show   = zj_seq_ov_show,
+};
+
+static int zj_seq_ov_open(struct inode *inode, struct file *file)
+{
+	zjournal_t *journal = PDE_DATA(inode);
+	struct zj_ov_proc_session *s;
+	int rc, size;
+
+	s = kmalloc(sizeof(*s), GFP_KERNEL);
+	if (s == NULL)
+		return -ENOMEM;
+	size = sizeof(struct zjournal_overhead);
+	s->ovs = kmalloc(size, GFP_KERNEL);
+	if (s->ovs == NULL) {
+		kfree(s);
+		return -ENOMEM;
+	}
+	spin_lock(&journal->j_ov_lock);
+	memcpy(s->ovs, &journal->j_ov_stats, size);
+	s->journal = journal;
+	spin_unlock(&journal->j_ov_lock);
+
+	rc = seq_open(file, &zj_seq_ov_ops);
+	if (rc == 0) {
+		struct seq_file *m = file->private_data;
+		m->private = s;
+	} else {
+		kfree(s->ovs);
+		kfree(s);
+	}
+	return rc;
+
+}
+
+static int zj_seq_ov_release(struct inode *inode, struct file *file)
+{
+	struct seq_file *seq = file->private_data;
+	struct zj_ov_proc_session *s = seq->private;
+	kfree(s->ovs);
+	kfree(s);
+	return seq_release(inode, file);
+}
+
+static const struct file_operations zj_seq_ov_fops = {
+	.owner		= THIS_MODULE,
+	.open           = zj_seq_ov_open,
+	.read           = seq_read,
+	.llseek         = seq_lseek,
+	.release        = zj_seq_ov_release,
+};
+#endif
+
 static int zj_seq_info_open(struct inode *inode, struct file *file)
 {
 	zjournal_t *journal = PDE_DATA(inode);
@@ -1219,6 +1340,10 @@ static void zj_stats_proc_init(zjournal_t *journal)
 	if (journal->j_proc_entry) {
 		proc_create_data("info", S_IRUGO, journal->j_proc_entry,
 				 &zj_seq_info_fops, journal);
+#ifdef ZJ_PROFILE
+		proc_create_data("overhead", S_IRUGO, journal->j_proc_entry,
+				&zj_seq_ov_fops, journal);
+#endif
 	}
 }
 
@@ -1261,6 +1386,7 @@ static zjournal_t *journal_init_common(struct block_device *bdev,
 	mutex_init(&journal->j_checkpoint_mutex);
 	spin_lock_init(&journal->j_revoke_lock);
 	spin_lock_init(&journal->j_list_lock);
+	spin_lock_init(&journal->j_mark_lock);
 	rwlock_init(&journal->j_state_lock);
 
 	journal->j_commit_interval = (HZ * ZJ_DEFAULT_MAX_COMMIT_AGE);
@@ -1277,6 +1403,9 @@ static zjournal_t *journal_init_common(struct block_device *bdev,
 		goto err_cleanup;
 
 	spin_lock_init(&journal->j_history_lock);
+#ifdef ZJ_PROFILE
+	spin_lock_init(&journal->j_ov_lock);
+#endif
 
 	lockdep_init_map(&journal->j_trans_commit_map, "zj_handle",
 			 &zj_trans_commit_key, 0);

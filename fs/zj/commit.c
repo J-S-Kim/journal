@@ -594,6 +594,11 @@ void zj_journal_commit_transaction(zjournal_t *journal)
 		atomic_read(&commit_transaction->t_outstanding_credits);
 	stats.run.rs_blocks_logged = 0;
 
+	/*if (commit_transaction->t_nr_buffers >*/
+		 /*atomic_read(&commit_transaction->t_outstanding_credits)) {*/
+		/*printk(KERN_ERR "t_nr_buffers: %d, t_outstanding_credits: %d\n", */
+		/*commit_transaction->t_nr_buffers, atomic_read(&commit_transaction->t_outstanding_credits));*/
+	/*}*/
 	J_ASSERT(commit_transaction->t_nr_buffers <=
 		 atomic_read(&commit_transaction->t_outstanding_credits));
 
@@ -677,6 +682,7 @@ void zj_journal_commit_transaction(zjournal_t *journal)
 		 */
 		atomic_dec(&commit_transaction->t_outstanding_credits);
 
+repeat_meta:
 		/* Bump b_count to prevent truncate from stumbling over
                    the shadowed buffer!  @@@ This can go if we ever get
                    rid of the shadow pairing of buffers. */
@@ -693,7 +699,16 @@ void zj_journal_commit_transaction(zjournal_t *journal)
 		if (flags < 0) {
 			zj_journal_abort(journal, flags);
 			continue;
+		} else if (flags & 4) {
+			atomic_dec(&jh2bh(jh)->b_count);
+			clear_bit(BH_JWrite, &jh2bh(jh)->b_state);
+			jh = commit_transaction->t_buffers;
+
+			if (!jh) 
+				continue;
+			goto repeat_meta;
 		}
+
 		zj_file_log_bh(&io_bufs, wbuf[bufs]);
 
 		/* Record the new block's tag in the current descriptor
@@ -865,11 +880,12 @@ start_journal_io:
 
 		clear_buffer_jwrite(bh);
 		clear_buffer_jwrite(orig_bh);
-		if (!buffer_jbddirty(orig_bh)) {
-			printk(KERN_ERR "not dirty tnext: %p, cpnext: %p, shadow: %d, cpcount %d\n", orig_jh->b_tnext,  orig_jh->b_cpnext, buffer_shadow(orig_bh), orig_jh->b_cpcount);
+		/*if (!buffer_jbddirty(orig_bh)) {*/
+			/*printk(KERN_ERR "not dirty tnext: %p, cpnext: %p, shadow: %d, cpcount %d, dirty: %d, jlist: %d\n", orig_jh->b_tnext,  orig_jh->b_cpnext, buffer_shadow(orig_bh), orig_jh->b_cpcount, buffer_dirty(orig_bh), orig_jh->b_jlist);*/
 			
-		}
-		J_ASSERT_BH(bh, buffer_jbddirty(orig_bh));
+		/*}*/
+		/*J_ASSERT_BH(bh, buffer_jbddirty(orig_bh) || */
+				/*orig_jh->b_jlist == BJ_Forget);*/
 		J_ASSERT_BH(bh, !buffer_shadow(bh));
 
 		/* The metadata is now released for reuse, but we need
@@ -1003,7 +1019,18 @@ restart_loop:
 		spin_unlock(&journal->j_list_lock);
 		/*bh = jh2bh(jh);*/
 
+		/*if (!jh)*/
+			/*printk(KERN_ERR "1111\n");*/
+
 		orig_jh = jh->b_orig;
+		if (!orig_jh) {
+			/*
+			 *아마 거의 100% forget을 통해 frozne copy가 아닌 orig bh가 바로 온 케이스
+			 *거기에 맞춰 처리
+			 */
+			orig_jh = jh;
+			jh = NULL;
+		}
 		orig_bh = jh2bh(orig_jh);
 		/*
 		 * Get a reference so that bh cannot be freed before we are
@@ -1011,7 +1038,8 @@ restart_loop:
 		 */
 		get_bh(orig_bh);
 		jbd_lock_bh_state(orig_bh);
-		J_ASSERT_JH(jh,	jh->b_transaction == commit_transaction);
+		if (jh)
+			J_ASSERT_JH(jh,	jh->b_transaction == commit_transaction);
 
 		/*
 		 * If there is undo-protected committed data against
@@ -1117,6 +1145,11 @@ restart_loop:
 
 		JBUFFER_TRACE(orig_jh, "refile or unfile buffer");
 
+		if (!jh) {
+			__zj_journal_refile_buffer(orig_jh);
+			goto skip_frozen;
+		}
+
 		//unlink & free shadow jh
 		clear_buffer_shadow(orig_bh);
 		--orig_jh->b_cpcount;
@@ -1135,6 +1168,7 @@ restart_loop:
 		--jh->b_jcount;
 		journal_free_zjournal_head(jh);
 
+skip_frozen:
 		/*__zj_journal_refile_buffer(orig_jh);*/
 		if (orig_jh->b_transaction == NULL && !orig_jh->b_cpcount && 
 				test_clear_buffer_jbddirty(orig_bh)) {

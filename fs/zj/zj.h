@@ -34,6 +34,8 @@
 #include <linux/percpu.h>
 #endif
 
+//#define ZJ_PROFILE
+
 #define journal_oom_retry 1
 
 /*
@@ -728,6 +730,7 @@ struct ztransaction_s
 	 */
 	unsigned int t_synchronous_commit:1;
 	unsigned int t_real_commit:1;
+	unsigned int t_real_committing:1;
 
 	/* Disk flush needs to be sent to fs partition [no locking] */
 	int			t_need_data_flush;
@@ -738,6 +741,19 @@ struct ztransaction_s
 	 */
 	struct list_head	t_private_list;
 };
+
+#ifdef ZJ_PROFILE
+struct zjournal_overhead {
+    unsigned long       zj_copy_time1;
+    unsigned long       zj_copy_time2;
+    unsigned long       zj_wait_time1;
+    unsigned long       zj_wait_time2;
+    unsigned int        zj_copy_page1;
+    unsigned int        zj_copy_page2;
+    unsigned int        zj_wait_page1;
+    unsigned int        zj_wait_page2;
+};
+#endif
 
 struct transaction_run_stats_s {
 	unsigned long		rs_wait;
@@ -981,6 +997,7 @@ struct zjournal_s
 	 * @j_list_lock: Protects the buffer lists and internal buffer state.
 	 */
 	spinlock_t		j_list_lock;
+	spinlock_t		j_mark_lock;
 
 	/**
 	 * @j_inode:
@@ -1146,6 +1163,10 @@ struct zjournal_s
 	 * @j_stats: Overall statistics.
 	 */
 	struct transaction_stats_s j_stats;
+#ifdef ZJ_PROFILE
+    struct zjournal_overhead j_ov_stats;
+    spinlock_t              j_ov_lock;
+#endif
 
 	/**
 	 * @j_failed_commit: Failed journal commit ID.
@@ -1508,7 +1529,7 @@ extern void	   zj_journal_write_revoke_records(ztransaction_t *transaction,
 extern struct zjournal_head *journal_alloc_zjournal_head(void);
 extern void journal_free_zjournal_head(struct zjournal_head *jh);
 extern void zj_shadow(struct buffer_head *orig_bh, struct zjournal_head *orig_jh,
-                struct zjournal_head *jh, struct buffer_head *bh, char *data);
+                struct zjournal_head *jh, struct buffer_head *bh, char *data, int background);
 
 /* Recovery revoke support */
 extern int	zj_journal_set_revoke(zjournal_t *, unsigned long long, tid_t);

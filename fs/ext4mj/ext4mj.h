@@ -1339,7 +1339,7 @@ struct ext4mj_super_block {
 	__le32	s_reserved[98];		/* Padding to the end of the block */
 	__le32	s_checksum;		/* crc32c(superblock) */
 #define s_journal_inum _s_journal_inum[0]
-/*E0*/	__le32	_s_journal_inum[EXT4MJ_NUM_JOURNALS];		/* inode number of journal file */
+/*E0*/	__le32	*_s_journal_inum;		/* inode number of journal file */
 /* cassiano:: the journals are added in the end, so we don't mess up with the
  * on-disk datastructure for the multiple journals */
 };
@@ -1420,7 +1420,7 @@ struct ext4mj_sb_info {
 	/* Journaling */
 #define s_journal _s_journal[0]
     //struct zjournal_s *s_journal;
-    struct zjournal_s *_s_journal[EXT4MJ_NUM_JOURNALS]; /* cassiano:: number of journals */
+    struct zjournal_s **_s_journal; /* cassiano:: number of journals */
 	struct list_head s_orphan;
 	struct mutex s_orphan_lock;
 	unsigned long s_ext4mj_flags;		/* Ext4 superblock flags */
