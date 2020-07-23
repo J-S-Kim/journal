@@ -52,6 +52,7 @@ int __init zj_journal_init_transaction_cache(void)
 
 void zj_journal_destroy_transaction_cache(void)
 {
+	printk(KERN_ERR "dest tcache\n");
 	if (transaction_cache) {
 		kmem_cache_destroy(transaction_cache);
 		transaction_cache = NULL;
@@ -321,6 +322,8 @@ alloc_transaction:
 		 */
 		if ((gfp_mask & __GFP_FS) == 0)
 			gfp_mask |= __GFP_NOFAIL;
+		if (!transaction_cache)
+			printk(KERN_ERR "tcache NULL\n");
 		new_transaction = kmem_cache_zalloc(transaction_cache,
 						    gfp_mask);
 		if (!new_transaction)
@@ -847,6 +850,11 @@ void zj_shadow(struct buffer_head *orig_bh, struct zjournal_head *orig_jh,
 	struct page *page, *new_page;
 	int offset, new_offset;
 	char *source;
+#ifdef ZJ_PROFILE
+	unsigned long start_time, end_time;
+
+	start_time = jiffies;
+#endif
 
 	//copy data
 	page = orig_bh->b_page;
@@ -868,6 +876,9 @@ void zj_shadow(struct buffer_head *orig_bh, struct zjournal_head *orig_jh,
 	get_bh(bh);
 	jh->b_jcount++;
 
+	jbd_lock_bh_state(bh);
+	set_buffer_shadow(bh);
+
 	//replace Metadata list orig_jh <-> jh
 	spin_lock(&journal->j_list_lock);
 	list = &orig_jh->b_transaction->t_buffers;
@@ -885,6 +896,14 @@ void zj_shadow(struct buffer_head *orig_bh, struct zjournal_head *orig_jh,
 	jh->b_transaction = transaction;
 	jh->b_orig = orig_jh;
 	orig_jh->b_orig = jh;
+	jbd_unlock_bh_state(bh);
+
+#ifdef ZJ_PROFILE
+	end_time = jiffies;
+	spin_lock(&journal->j_ov_lock);
+	journal->j_ov_stats.zj_copy_time += zj_time_diff(start_time, end_time);
+	spin_unlock(&journal->j_ov_lock);
+#endif
 }
 
 static inline void add_commit_mark_two_side(zjournal_t *journal, ztransaction_t *transaction, 
@@ -963,6 +982,9 @@ do_get_write_access(handle_t *handle, struct zjournal_head *jh,
 	int error;
 	char *frozen_buffer = NULL;
 	unsigned long start_lock, time_lock;
+#ifdef ZJ_PROFILE
+	unsigned long start_time, end_time;
+#endif
 
 	if (is_handle_aborted(handle))
 		return -EROFS;
@@ -1112,10 +1134,19 @@ repeat:
 		if (!frozen_buffer) {
 			JBUFFER_TRACE(jh, "allocate memory for buffer");
 			jbd_unlock_bh_state(bh);
+#ifdef ZJ_PROFILE
+			start_time = jiffies;
+#endif
 			frozen_buffer = zj_alloc(jh2bh(jh)->b_size,
 						   GFP_NOFS | __GFP_NOFAIL);
 			frozen_jh = journal_alloc_zjournal_head();
 			frozen_bh = alloc_buffer_head(GFP_NOFS|__GFP_NOFAIL);
+#ifdef ZJ_PROFILE
+			end_time = jiffies;
+			spin_lock(&journal->j_ov_lock);
+			journal->j_ov_stats.zj_copy_time += zj_time_diff(start_time, end_time);
+			spin_unlock(&journal->j_ov_lock);
+#endif
 			/*atomic_set(&frozen_bh, 1);*/
 
 			goto repeat;
@@ -1124,7 +1155,6 @@ repeat:
 		zj_shadow(bh, jh, frozen_jh, frozen_bh, frozen_buffer);
 
 		J_ASSERT_BH(bh, buffer_jbddirty(bh));
-		set_buffer_shadow(frozen_bh);
 		set_buffer_jbddirty(frozen_bh);
 
 		frozen_buffer = NULL;
@@ -1674,11 +1704,13 @@ out_unlock_bh:
 int zj_journal_forget (handle_t *handle, struct buffer_head *bh)
 {
 	ztransaction_t *transaction = handle->h_transaction;
-	zjournal_t *journal;
+	ztransaction_t *jtransaction;
+	zjournal_t *journal, *jjournal;
 	struct zjournal_head *jh;
 	int drop_reserve = 0;
 	int err = 0;
 	int was_modified = 0;
+	int was_dirty = 0;
 
 	if (is_handle_aborted(handle))
 		return -EROFS;
@@ -1709,7 +1741,21 @@ int zj_journal_forget (handle_t *handle, struct buffer_head *bh)
 	 */
 	jh->b_modified = 0;
 
-	if (jh->b_transaction == transaction) {
+	/*if (jh->b_transaction == transaction) {*/
+	if (!jh->b_cpcount && jh->b_transaction) {
+		jtransaction = jh->b_transaction;
+		jjournal = jtransaction->t_journal;
+
+		read_lock(&jjournal->j_state_lock);
+		if (jtransaction->t_state > T_LOCKED) {
+			// 이제 처음 commit에 진입해서 처리 중
+			// 기존 jbd2와 비교하자면, b_transaction은 있고
+			// committing인데 next는 없는 상태
+			read_unlock(&jjournal->j_state_lock);
+			goto not_jbd;
+		}
+		read_unlock(&jjournal->j_state_lock);
+
 		J_ASSERT_JH(jh, !jh->b_frozen_data);
 
 		/* If we are forgetting a buffer which is already part
@@ -1739,34 +1785,49 @@ int zj_journal_forget (handle_t *handle, struct buffer_head *bh)
 		 * we know to remove the checkpoint after we commit.
 		 */
 
-		spin_lock(&journal->j_list_lock);
+		spin_lock(&jjournal->j_list_lock);
 		if (jh->b_cp_transaction) {
 			__zj_zjournal_temp_unlink_buffer(jh);
-			__zj_journal_file_buffer(jh, transaction, BJ_Forget);
+			__zj_journal_file_buffer(jh, jtransaction, BJ_Forget);
 		} else {
 			__zj_journal_unfile_buffer(jh);
 			if (!buffer_jbd(bh)) {
-				spin_unlock(&journal->j_list_lock);
+				spin_unlock(&jjournal->j_list_lock);
 				jbd_unlock_bh_state(bh);
 				__bforget(bh);
 				goto drop;
 			}
 		}
-		spin_unlock(&journal->j_list_lock);
-	} else if (jh->b_transaction) {
-		J_ASSERT_JH(jh, (jh->b_transaction ==
-				 journal->j_committing_transaction));
+		spin_unlock(&jjournal->j_list_lock);
+	} else if (jh->b_cpcount) {
+		/*J_ASSERT_JH(jh, (jh->b_transaction ==*/
+				 /*journal->j_committing_transaction));*/
 		/* However, if the buffer is still owned by a prior
 		 * (committing) transaction, we can't drop it yet... */
 		JBUFFER_TRACE(jh, "belongs to older transaction");
 		/* ... but we CAN drop it from the new transaction if we
 		 * have also modified it since the original commit. */
 
-		if (jh->b_next_transaction) {
-			J_ASSERT(jh->b_next_transaction == transaction);
-			spin_lock(&journal->j_list_lock);
-			jh->b_next_transaction = NULL;
-			spin_unlock(&journal->j_list_lock);
+		if (jh->b_transaction) {
+			jtransaction = jh->b_transaction;
+			jjournal = jtransaction->t_journal;
+
+			read_lock(&jjournal->j_state_lock);
+			if (jtransaction->t_state > T_LOCKED) {
+				read_unlock(&jjournal->j_state_lock);
+				goto not_jbd;
+			}
+			read_unlock(&jjournal->j_state_lock);
+
+			/*J_ASSERT(jh->b_next_transaction == transaction);*/
+			spin_lock(&jjournal->j_list_lock);
+			if (test_clear_buffer_dirty(bh) ||
+					test_clear_buffer_jbddirty(bh))
+				was_dirty = 1;
+			__zj_journal_unfile_buffer(jh);
+			if (was_dirty)
+				set_buffer_jbddirty(bh);
+			spin_unlock(&jjournal->j_list_lock);
 
 			/*
 			 * only drop a reference if this transaction modified
@@ -1781,10 +1842,10 @@ not_jbd:
 	jbd_unlock_bh_state(bh);
 	__brelse(bh);
 drop:
-	if (drop_reserve) {
+	/*if (drop_reserve) {*/
 		/* no need to reserve log space for this block -bzzz */
-		handle->h_buffer_credits++;
-	}
+		/*handle->h_buffer_credits++;*/
+	/*}*/
 	return err;
 }
 

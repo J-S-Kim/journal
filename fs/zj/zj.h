@@ -34,6 +34,8 @@
 #include <linux/percpu.h>
 #endif
 
+#define ZJ_PROFILE
+
 #define journal_oom_retry 1
 
 /*
@@ -728,6 +730,7 @@ struct ztransaction_s
 	 */
 	unsigned int t_synchronous_commit:1;
 	unsigned int t_real_commit:1;
+	unsigned int t_real_committing:1;
 
 	/* Disk flush needs to be sent to fs partition [no locking] */
 	int			t_need_data_flush;
@@ -738,6 +741,13 @@ struct ztransaction_s
 	 */
 	struct list_head	t_private_list;
 };
+
+#ifdef ZJ_PROFILE
+struct zjournal_overhead {
+    unsigned long       zj_copy_time;
+    unsigned long       zj_wait_time;
+};
+#endif
 
 struct transaction_run_stats_s {
 	unsigned long		rs_wait;
@@ -981,6 +991,7 @@ struct zjournal_s
 	 * @j_list_lock: Protects the buffer lists and internal buffer state.
 	 */
 	spinlock_t		j_list_lock;
+	spinlock_t		j_mark_lock;
 
 	/**
 	 * @j_inode:
@@ -1146,6 +1157,10 @@ struct zjournal_s
 	 * @j_stats: Overall statistics.
 	 */
 	struct transaction_stats_s j_stats;
+#ifdef ZJ_PROFILE
+    struct zjournal_overhead j_ov_stats;
+    spinlock_t              j_ov_lock;
+#endif
 
 	/**
 	 * @j_failed_commit: Failed journal commit ID.
