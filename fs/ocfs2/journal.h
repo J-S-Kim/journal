@@ -27,7 +27,7 @@
 #define OCFS2_JOURNAL_H
 
 #include <linux/fs.h>
-#include <linux/jbd2.h>
+#include <../zj/zj.h>
 
 enum ocfs2_journal_state {
 	OCFS2_JOURNAL_FREE = 0,
@@ -52,7 +52,7 @@ struct ocfs2_recovery_map {
 struct ocfs2_journal {
 	enum ocfs2_journal_state   j_state;    /* Journals current state   */
 
-	journal_t                 *j_journal; /* The kernels journal type */
+	zjournal_t                 *j_journal; /* The kernels journal type */
 	struct inode              *j_inode;   /* Kernel inode pointing to
 					       * this journal             */
 	struct ocfs2_super        *j_osb;     /* pointer to the super
@@ -75,6 +75,7 @@ struct ocfs2_journal {
 	/* both fields protected by j_lock*/
 	struct list_head          j_la_cleanups;
 	struct work_struct        j_recovery_work;
+    unsigned int              j_id;
 };
 
 extern spinlock_t trans_inc_lock;
@@ -150,7 +151,7 @@ static inline void ocfs2_ci_set_new(struct ocfs2_super *osb,
 				    struct ocfs2_caching_info *ci)
 {
 	spin_lock(&trans_inc_lock);
-	ci->ci_created_trans = osb->journal->j_trans_id;
+	ci->ci_created_trans = osb->journal[smp_processor_id()]->j_trans_id;
 	spin_unlock(&trans_inc_lock);
 }
 
@@ -183,13 +184,13 @@ int ocfs2_compute_replay_slots(struct ocfs2_super *osb);
  *                          event on.
  *  ocfs2_start_checkpoint - Kick the commit thread to do a checkpoint.
  */
-void   ocfs2_set_journal_params(struct ocfs2_super *osb);
-int    ocfs2_journal_init(struct ocfs2_journal *journal,
+void   ocfs2_set_journal_params(struct ocfs2_journal *s_journal);
+int    ocfs2_journal_init(struct ocfs2_journal **journal_arr,
 			  int *dirty);
 void   ocfs2_journal_shutdown(struct ocfs2_super *osb);
-int    ocfs2_journal_wipe(struct ocfs2_journal *journal,
+int    ocfs2_journal_wipe(struct ocfs2_journal **journal_arr,
 			  int full);
-int    ocfs2_journal_load(struct ocfs2_journal *journal, int local,
+int    ocfs2_journal_load(struct ocfs2_journal **journal_arr, int local,
 			  int replayed);
 int    ocfs2_check_journals_nolocks(struct ocfs2_super *osb);
 void   ocfs2_recovery_thread(struct ocfs2_super *osb,
@@ -219,7 +220,7 @@ static inline void ocfs2_checkpoint_inode(struct inode *inode)
 		 * OK. */
 		ocfs2_start_checkpoint(osb);
 
-		wait_event(osb->journal->j_checkpointed,
+		wait_event(osb->journal[smp_processor_id()]->j_checkpointed,
 			   ocfs2_ci_fully_checkpointed(INODE_CACHE(inode)));
 	}
 }
@@ -246,7 +247,7 @@ static inline void ocfs2_checkpoint_inode(struct inode *inode)
  *                          ocfs2_journal_access_*() unless you intend to
  *                          manage the checksum by hand.
  *  ocfs2_journal_dirty    - Mark a journalled buffer as having dirty data.
- *  ocfs2_jbd2_file_inode  - Mark an inode so that its data goes out before
+ *  ocfs2_zj_file_inode  - Mark an inode so that its data goes out before
  *                           the current handle commits.
  */
 
@@ -617,16 +618,16 @@ static inline int ocfs2_calc_tree_trunc_credits(struct super_block *sb,
 	return credits;
 }
 
-static inline int ocfs2_jbd2_file_inode(handle_t *handle, struct inode *inode)
+static inline int ocfs2_zj_file_inode(handle_t *handle, struct inode *inode)
 {
-	return jbd2_journal_inode_add_write(handle, &OCFS2_I(inode)->ip_jinode);
+	return zj_journal_inode_add_write(handle, &OCFS2_I(inode)->ip_jinode);
 }
 
 static inline int ocfs2_begin_ordered_truncate(struct inode *inode,
 					       loff_t new_size)
 {
-	return jbd2_journal_begin_ordered_truncate(
-				OCFS2_SB(inode->i_sb)->journal->j_journal,
+	return zj_journal_begin_ordered_truncate(
+				OCFS2_SB(inode->i_sb)->journal[smp_processor_id()]->j_journal,
 				&OCFS2_I(inode)->ip_jinode,
 				new_size);
 }

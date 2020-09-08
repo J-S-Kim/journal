@@ -36,7 +36,7 @@
 #include <linux/kref.h>
 #include <linux/mutex.h>
 #include <linux/lockdep.h>
-#include <linux/jbd2.h>
+#include <../zj/zj.h>
 
 /* For union ocfs2_dlm_lksb */
 #include "stackglue.h"
@@ -360,7 +360,10 @@ struct ocfs2_super
 	struct task_struct *recovery_thread_task;
 	int disable_recovery;
 	wait_queue_head_t checkpoint_event;
-	struct ocfs2_journal *journal;
+
+    zjournal_t **zjournal;
+	struct ocfs2_journal **journal;
+    unsigned int num_journal;
 	unsigned long osb_commit_interval;
 
 	struct delayed_work		la_enable_wq;

@@ -299,9 +299,9 @@ static int ocfs2_osb_dump(struct ocfs2_super *osb, char *buf, int len)
 
 	out += snprintf(buf + out, len - out,
 			"%10s => State: %d  TxnId: %lu  NumTxns: %d\n",
-			"Journal", osb->journal->j_state,
-			osb->journal->j_trans_id,
-			atomic_read(&osb->journal->j_num_trans));
+			"Journal", osb->journal[smp_processor_id()]->j_state,
+			osb->journal[smp_processor_id()]->j_trans_id,
+			atomic_read(&osb->journal[smp_processor_id()]->j_num_trans));
 
 	out += snprintf(buf + out, len - out,
 			"%10s => GlobalAllocs: %d  LocalAllocs: %d  "
@@ -423,10 +423,10 @@ static int ocfs2_sync_fs(struct super_block *sb, int wait)
 		ocfs2_schedule_truncate_log_flush(osb, 0);
 	}
 
-	if (jbd2_journal_start_commit(OCFS2_SB(sb)->journal->j_journal,
+	if (zj_journal_start_commit(OCFS2_SB(sb)->journal[smp_processor_id()]->j_journal,
 				      &target)) {
 		if (wait)
-			jbd2_log_wait_commit(OCFS2_SB(sb)->journal->j_journal,
+			zj_log_wait_commit(OCFS2_SB(sb)->journal[smp_processor_id()]->j_journal,
 					     target);
 	}
 	return 0;
@@ -494,14 +494,25 @@ static int ocfs2_init_local_system_inodes(struct ocfs2_super *osb)
 {
 	struct inode *new = NULL;
 	int status = 0;
-	int i;
+	int i, j;
 
 	for (i = OCFS2_LAST_GLOBAL_SYSTEM_INODE + 1;
 	     i < NUM_SYSTEM_INODES;
 	     i++) {
 		if (!ocfs2_need_system_inode(osb, i))
 			continue;
-		new = ocfs2_get_system_file_inode(osb, i, osb->slot_num);
+		if (i == JOURNAL_SYSTEM_INODE) {
+			for (j = 0; j < 80; j++) {
+				new = ocfs2_get_system_file_inode(osb, i, j);
+				if (!new) {
+					printk(KERN_ERR "journal inode get err %d\n",j);
+					break;
+				}
+			}
+			continue;
+		} else
+			new = ocfs2_get_system_file_inode(osb, i, osb->slot_num);
+
 		if (!new) {
 			ocfs2_release_system_inodes(osb);
 			status = ocfs2_is_soft_readonly(osb) ? -EROFS : -EINVAL;
@@ -571,7 +582,7 @@ static struct inode *ocfs2_alloc_inode(struct super_block *sb)
 	oi->i_datasync_tid = 0;
 	memset(&oi->i_dquot, 0, sizeof(oi->i_dquot));
 
-	jbd2_journal_init_jbd_inode(&oi->ip_jinode, &oi->vfs_inode);
+	zj_journal_init_jbd_inode(&oi->ip_jinode, &oi->vfs_inode);
 	return &oi->vfs_inode;
 }
 
@@ -636,7 +647,7 @@ static unsigned long long ocfs2_max_file_offset(unsigned int bbits,
 static int ocfs2_remount(struct super_block *sb, int *flags, char *data)
 {
 	int incompat_features;
-	int ret = 0;
+	int i, ret = 0;
 	struct mount_options parsed_options;
 	struct ocfs2_super *osb = OCFS2_SB(sb);
 	u32 tmp;
@@ -740,8 +751,10 @@ unlock_osb:
 		if (parsed_options.commit_interval)
 			osb->osb_commit_interval = parsed_options.commit_interval;
 
-		if (!ocfs2_is_hard_readonly(osb))
-			ocfs2_set_journal_params(osb);
+		if (!ocfs2_is_hard_readonly(osb)) {
+			for (i=0; i<osb->num_journal; i++)
+				ocfs2_set_journal_params(osb->journal[i]);
+		}
 
 		sb->s_flags = (sb->s_flags & ~MS_POSIXACL) |
 			((osb->s_mount_opt & OCFS2_MOUNT_POSIX_ACL) ?
@@ -1379,7 +1392,7 @@ static int ocfs2_parse_options(struct super_block *sb,
 			if (option < 0)
 				return 0;
 			if (option == 0)
-				option = JBD2_DEFAULT_MAX_COMMIT_AGE;
+				option = ZJ_DEFAULT_MAX_COMMIT_AGE;
 			mopt->commit_interval = HZ * option;
 			break;
 		case Opt_localalloc:
@@ -2002,7 +2015,7 @@ static int ocfs2_setup_osb_uuid(struct ocfs2_super *osb, const unsigned char *uu
    initialized by ocfs2_journal_init(). */
 static int ocfs2_journal_addressable(struct ocfs2_super *osb)
 {
-	int status = 0;
+	int i, status = 0;
 	u64 max_block =
 		ocfs2_clusters_to_blocks(osb->sb,
 					 osb->osb_clusters_at_boot) - 1;
@@ -2013,14 +2026,16 @@ static int ocfs2_journal_addressable(struct ocfs2_super *osb)
 
 	/* Volume is "huge", so see if our journal is new enough to
 	   support it. */
-	if (!(OCFS2_HAS_COMPAT_FEATURE(osb->sb,
-				       OCFS2_FEATURE_COMPAT_JBD2_SB) &&
-	      jbd2_journal_check_used_features(osb->journal->j_journal, 0, 0,
-					       JBD2_FEATURE_INCOMPAT_64BIT))) {
-		mlog(ML_ERROR, "The journal cannot address the entire volume. "
-		     "Enable the 'block64' journal option with tunefs.ocfs2");
-		status = -EFBIG;
-		goto out;
+	for (i = 0; i < osb->num_journal; i++) {
+		if (!(OCFS2_HAS_COMPAT_FEATURE(osb->sb,
+					       OCFS2_FEATURE_COMPAT_ZJ_SB) &&
+		      zj_journal_check_used_features(osb->journal[i]->j_journal, 0, 0,
+						       ZJ_FEATURE_INCOMPAT_64BIT))) {
+			mlog(ML_ERROR, "The journal cannot address the entire volume. "
+			     "Enable the 'block64' journal option with tunefs.ocfs2");
+			status = -EFBIG;
+			goto out;
+		}
 	}
 
  out:
@@ -2036,7 +2051,7 @@ static int ocfs2_initialize_super(struct super_block *sb,
 	int i, cbits, bbits;
 	struct ocfs2_dinode *di = (struct ocfs2_dinode *)bh->b_data;
 	struct inode *inode = NULL;
-	struct ocfs2_journal *journal;
+	struct ocfs2_journal **journal_arr;
 	struct ocfs2_super *osb;
 	u64 total_blocks;
 
@@ -2220,23 +2235,32 @@ static int ocfs2_initialize_super(struct super_block *sb,
 	 */
 	/* initialize our journal structure */
 
-	journal = kzalloc(sizeof(struct ocfs2_journal), GFP_KERNEL);
-	if (!journal) {
-		mlog(ML_ERROR, "unable to alloc journal\n");
+	osb->num_journal = num_online_cpus();
+	journal_arr = kzalloc(sizeof(struct ocfs2_journal *)*80, GFP_KERNEL);
+	osb->zjournal = kzalloc(sizeof(zjournal_t *)*80, GFP_KERNEL);
+	if (!journal_arr) {
+		mlog(ML_ERROR, "unable to alloc journal_arr\n");
 		status = -ENOMEM;
 		goto bail;
 	}
-	osb->journal = journal;
-	journal->j_osb = osb;
+	for (i = 0; i < osb->num_journal; i++ ) {
+		struct ocfs2_journal *journal;
 
-	atomic_set(&journal->j_num_trans, 0);
-	init_rwsem(&journal->j_trans_barrier);
-	init_waitqueue_head(&journal->j_checkpointed);
-	spin_lock_init(&journal->j_lock);
-	journal->j_trans_id = (unsigned long) 1;
-	INIT_LIST_HEAD(&journal->j_la_cleanups);
-	INIT_WORK(&journal->j_recovery_work, ocfs2_complete_recovery);
-	journal->j_state = OCFS2_JOURNAL_FREE;
+		journal_arr[i] = kzalloc(sizeof(struct ocfs2_journal), GFP_KERNEL);
+		journal = journal_arr[i];
+		journal->j_osb = osb;
+
+		atomic_set(&journal->j_num_trans, 0);
+		init_rwsem(&journal->j_trans_barrier);
+		init_waitqueue_head(&journal->j_checkpointed);
+		spin_lock_init(&journal->j_lock);
+		journal->j_trans_id = (unsigned long) 1;
+		INIT_LIST_HEAD(&journal->j_la_cleanups);
+		INIT_WORK(&journal->j_recovery_work, ocfs2_complete_recovery);
+		journal->j_state = OCFS2_JOURNAL_FREE;
+		journal->j_id = i;
+	}
+	osb->journal = journal_arr;
 
 	INIT_WORK(&osb->dquot_drop_work, ocfs2_drop_dquot_refs);
 	init_llist_head(&osb->dquot_drop_list);
@@ -2413,6 +2437,7 @@ static int ocfs2_check_volume(struct ocfs2_super *osb)
 	int status;
 	int dirty;
 	int local;
+	int i;
 	struct ocfs2_dinode *local_alloc = NULL; /* only used if we
 						  * recover
 						  * ourselves. */
@@ -2453,14 +2478,16 @@ static int ocfs2_check_volume(struct ocfs2_super *osb)
 		goto finally;
 	}
 
-	if (osb->s_mount_opt & OCFS2_MOUNT_JOURNAL_ASYNC_COMMIT)
-		jbd2_journal_set_features(osb->journal->j_journal,
-				JBD2_FEATURE_COMPAT_CHECKSUM, 0,
-				JBD2_FEATURE_INCOMPAT_ASYNC_COMMIT);
-	else
-		jbd2_journal_clear_features(osb->journal->j_journal,
-				JBD2_FEATURE_COMPAT_CHECKSUM, 0,
-				JBD2_FEATURE_INCOMPAT_ASYNC_COMMIT);
+	for (i = 0; i < osb->num_journal; i++) {
+		if (osb->s_mount_opt & OCFS2_MOUNT_JOURNAL_ASYNC_COMMIT)
+			zj_journal_set_features(osb->journal[i]->j_journal,
+					ZJ_FEATURE_COMPAT_CHECKSUM, 0,
+					ZJ_FEATURE_INCOMPAT_ASYNC_COMMIT);
+		else
+			zj_journal_clear_features(osb->journal[i]->j_journal,
+					ZJ_FEATURE_COMPAT_CHECKSUM, 0,
+					ZJ_FEATURE_INCOMPAT_ASYNC_COMMIT);
+	}
 
 	if (dirty) {
 		/* recover my local alloc if we didn't unmount cleanly. */
@@ -2517,6 +2544,7 @@ finally:
  */
 static void ocfs2_delete_osb(struct ocfs2_super *osb)
 {
+	int i;
 	/* This function assumes that the caller has the main osb resource */
 
 	/* ocfs2_initializer_super have already created this workqueue */
@@ -2534,7 +2562,10 @@ static void ocfs2_delete_osb(struct ocfs2_super *osb)
 	 * allocate osb->journal at the start of ocfs2_initialize_osb(),
 	 * we free it here.
 	 */
+	for (i=0; i< osb->num_journal; i++) 
+		kfree(osb->journal[i]);
 	kfree(osb->journal);
+	kfree(osb->zjournal);
 	kfree(osb->local_alloc_copy);
 	kfree(osb->uuid_str);
 	kfree(osb->vol_label);

@@ -57,7 +57,7 @@ static struct inode **get_local_system_inode(struct ocfs2_super *osb,
 					     int type,
 					     u32 slot)
 {
-	int index;
+	int index, i;
 	struct inode **local_system_inodes, **free = NULL;
 
 	BUG_ON(slot == OCFS2_INVALID_SLOT);
@@ -70,8 +70,8 @@ static struct inode **get_local_system_inode(struct ocfs2_super *osb,
 
 	if (unlikely(!local_system_inodes)) {
 		local_system_inodes = kzalloc(sizeof(struct inode *) *
-					      NUM_LOCAL_SYSTEM_INODES *
-					      osb->max_slots,
+					      (NUM_LOCAL_SYSTEM_INODES *
+					      osb->max_slots + 79),
 					      GFP_NOFS);
 		if (!local_system_inodes) {
 			mlog_errno(-ENOMEM);
@@ -94,7 +94,10 @@ static struct inode **get_local_system_inode(struct ocfs2_super *osb,
 		kfree(free);
 	}
 
-	index = (slot * NUM_LOCAL_SYSTEM_INODES) +
+	if (type == JOURNAL_SYSTEM_INODE && slot != 0)
+		index = (osb->max_slots * NUM_LOCAL_SYSTEM_INODES) + slot;
+	else
+		index = (slot * NUM_LOCAL_SYSTEM_INODES) +
 		(type - OCFS2_FIRST_LOCAL_SYSTEM_INODE);
 
 	return &local_system_inodes[index];
@@ -151,11 +154,13 @@ static struct inode * _ocfs2_get_system_file_inode(struct ocfs2_super *osb,
 	status = ocfs2_lookup_ino_from_name(osb->sys_root_inode, namebuf,
 					    strlen(namebuf), &blkno);
 	if (status < 0) {
+		printk(KERN_ERR "lookup err\n");
 		goto bail;
 	}
 
 	inode = ocfs2_iget(osb, blkno, OCFS2_FI_FLAG_SYSFILE, type);
 	if (IS_ERR(inode)) {
+		printk(KERN_ERR "iget err\n");
 		mlog_errno(PTR_ERR(inode));
 		inode = NULL;
 		goto bail;

@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0
 ccflags-y := -Ifs/ocfs2
+ccflags-y += -Ifs/zj
+
+KBUILD_EXTRA_SYMBOLS += fs/zj/Module.symvers
 
 obj-$(CONFIG_OCFS2_FS) += 	\
 	ocfs2.o			\

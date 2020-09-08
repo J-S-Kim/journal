@@ -991,9 +991,17 @@ void __zj_journal_drop_transaction(zjournal_t *journal, ztransaction_t *transact
 
 		transaction->t_cpnext = transaction->t_cpprev = NULL;
 	}
-
+	while (!list_empty(&transaction->t_complete_mark_list)) {
+		commit_entry_t *cur_mark = list_entry(transaction->t_complete_mark_list.next, 
+				commit_entry_t, pos);
+		list_del_init(&cur_mark->pos);
+		zj_free_commit(cur_mark);
+	}
 	free_percpu(transaction->t_commit_list);
 
+	J_ASSERT(list_empty(&transaction->t_check_mark_list));
+	J_ASSERT(list_empty(&transaction->t_complete_mark_list));
+	
 	J_ASSERT(transaction->t_real_commit == 1);
 	J_ASSERT(transaction->t_state == T_FINISHED);
 	J_ASSERT(transaction->t_buffers == NULL);

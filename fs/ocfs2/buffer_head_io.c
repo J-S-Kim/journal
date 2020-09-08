@@ -42,7 +42,7 @@
 /*
  * Bits on bh->b_state used by ocfs2.
  *
- * These MUST be after the JBD2 bits.  Hence, we use BH_JBDPrivateStart.
+ * These MUST be after the ZJ bits.  Hence, we use BH_JBDPrivateStart.
  */
 enum ocfs2_state_bits {
 	BH_NeedsValidate = BH_JBDPrivateStart,

@@ -916,8 +916,14 @@ static inline void add_commit_mark_two_side(zjournal_t *journal, ztransaction_t 
 	commit_entry_t *my_commit, *counter_commit;
 
 	//check exist
+	if (transaction->t_state > T_LOCKED || jtransaction->t_state > T_LOCKED) {
+		printk(KERN_ERR "STATE err\n");
+	}
+
 	list_for_each(pos, my_head) {
 		commit_entry_t *tmp = list_entry(pos, commit_entry_t, pos);
+		if (!tmp)
+			printk(KERN_ERR "tmp NULL\n");
 		if (tmp->core == counter_core && tmp->tid == counter_tid)
 			return;
 	}
@@ -1096,13 +1102,13 @@ repeat:
 
 		read_lock(&jjournal->j_state_lock);
 		if (jtransaction->t_state <= T_LOCKED) {
-			read_unlock(&jjournal->j_state_lock);
 			//add two side
 			add_commit_mark_two_side(journal, transaction, jjournal, jtransaction);
+			read_unlock(&jjournal->j_state_lock);
 			goto done;
 		} else {
-			read_unlock(&jjournal->j_state_lock);
 			add_commit_mark_only_mine(journal, transaction, jjournal, jtransaction);
+			read_unlock(&jjournal->j_state_lock);
 			/*if (jh->b_wcount) {*/
 				/*printk(KERN_ERR "wait\n");*/
 				/*set_buffer_metadirty(bh);*/

@@ -954,7 +954,7 @@ static void ocfs2_write_failure(struct inode *inode,
 
 		if (tmppage && page_has_buffers(tmppage)) {
 			if (ocfs2_should_order_data(inode))
-				ocfs2_jbd2_file_inode(wc->w_handle, inode);
+				ocfs2_zj_file_inode(wc->w_handle, inode);
 
 			block_commit_write(tmppage, from, to);
 		}
@@ -2036,7 +2036,7 @@ int ocfs2_write_end_nolock(struct address_space *mapping,
 
 		if (page_has_buffers(tmppage)) {
 			if (handle && ocfs2_should_order_data(inode))
-				ocfs2_jbd2_file_inode(handle, inode);
+				ocfs2_zj_file_inode(handle, inode);
 			block_commit_write(tmppage, from, to);
 		}
 	}

@@ -63,7 +63,7 @@ struct ocfs2_inode_info
 	struct ocfs2_caching_info	ip_metadata_cache;
 	struct ocfs2_extent_map		ip_extent_map;
 	struct inode			vfs_inode;
-	struct jbd2_inode		ip_jinode;
+	struct zj_inode		ip_jinode;
 
 	u32				ip_dir_start_lookup;
 

@@ -267,7 +267,7 @@ static int ocfs2_info_handle_journal_size(struct inode *inode,
 	if (o2info_from_user(oij, req))
 		return -EFAULT;
 
-	oij.ij_journal_size = i_size_read(osb->journal->j_inode);
+	oij.ij_journal_size = i_size_read(osb->journal[smp_processor_id()]->j_inode);
 
 	o2info_set_request_filled(&oij.ij_req);
 

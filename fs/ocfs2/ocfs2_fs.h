@@ -90,7 +90,7 @@
 	OCFS2_SB(sb)->s_feature_incompat &= ~(mask)
 
 #define OCFS2_FEATURE_COMPAT_SUPP	(OCFS2_FEATURE_COMPAT_BACKUP_SB	\
-					 | OCFS2_FEATURE_COMPAT_JBD2_SB)
+					 | OCFS2_FEATURE_COMPAT_ZJ_SB)
 #define OCFS2_FEATURE_INCOMPAT_SUPP	(OCFS2_FEATURE_INCOMPAT_LOCAL_MOUNT \
 					 | OCFS2_FEATURE_INCOMPAT_SPARSE_ALLOC \
 					 | OCFS2_FEATURE_INCOMPAT_INLINE_DATA \
@@ -191,7 +191,7 @@
 /*
  * The filesystem will correctly handle journal feature bits.
  */
-#define OCFS2_FEATURE_COMPAT_JBD2_SB		0x0002
+#define OCFS2_FEATURE_COMPAT_ZJ_SB		0x0002
 
 /*
  * Unwritten extents support.
@@ -363,7 +363,7 @@ enum {
 		(NUM_SYSTEM_INODES - OCFS2_FIRST_LOCAL_SYSTEM_INODE)
 
 static struct ocfs2_system_inode_info ocfs2_system_inodes[NUM_SYSTEM_INODES] = {
-	/* Global system inodes (single copy) */
+    /* Global system inodes (single copy) */
 	/* The first two are only used from userspace mfks/tunefs */
 	[BAD_BLOCK_SYSTEM_INODE]		= { "bad_blocks", 0, S_IFREG | 0644 },
 	[GLOBAL_INODE_ALLOC_SYSTEM_INODE] 	= { "global_inode_alloc", OCFS2_BITMAP_FL | OCFS2_CHAIN_FL, S_IFREG | 0644 },
@@ -379,7 +379,7 @@ static struct ocfs2_system_inode_info ocfs2_system_inodes[NUM_SYSTEM_INODES] = {
 	[ORPHAN_DIR_SYSTEM_INODE]		= { "orphan_dir:%04d", 0, S_IFDIR | 0755 },
 	[EXTENT_ALLOC_SYSTEM_INODE]		= { "extent_alloc:%04d", OCFS2_BITMAP_FL | OCFS2_CHAIN_FL, S_IFREG | 0644 },
 	[INODE_ALLOC_SYSTEM_INODE]		= { "inode_alloc:%04d", OCFS2_BITMAP_FL | OCFS2_CHAIN_FL, S_IFREG | 0644 },
-	[JOURNAL_SYSTEM_INODE]			= { "journal:%04d", OCFS2_JOURNAL_FL, S_IFREG | 0644 },
+	[JOURNAL_SYSTEM_INODE]			= { "journal:%d:%04d", OCFS2_JOURNAL_FL, S_IFREG | 0644 },
 	[LOCAL_ALLOC_SYSTEM_INODE]		= { "local_alloc:%04d", OCFS2_BITMAP_FL | OCFS2_LOCAL_ALLOC_FL, S_IFREG | 0644 },
 	[TRUNCATE_LOG_SYSTEM_INODE]		= { "truncate_log:%04d", OCFS2_DEALLOC_FL, S_IFREG | 0644 },
 	[LOCAL_USER_QUOTA_SYSTEM_INODE]		= { "aquota.user:%04d", OCFS2_QUOTA_FL, S_IFREG | 0644 },
@@ -1609,6 +1609,7 @@ static inline int ocfs2_sprintf_system_inode_name(char *buf, int len,
 						  int type, int slot)
 {
 	int chars;
+    int tmp = 0;
 
         /*
          * Global system inodes can only have one copy.  Everything
@@ -1618,10 +1619,16 @@ static inline int ocfs2_sprintf_system_inode_name(char *buf, int len,
 	if (type <= OCFS2_LAST_GLOBAL_SYSTEM_INODE)
 		chars = snprintf(buf, len, "%s",
 				 ocfs2_system_inodes[type].si_name);
-	else
-		chars = snprintf(buf, len,
+	else {
+        if (type == JOURNAL_SYSTEM_INODE)
+            chars = snprintf(buf, len,
+				 ocfs2_system_inodes[type].si_name,
+				 slot+10, tmp);
+        else
+            chars = snprintf(buf, len,
 				 ocfs2_system_inodes[type].si_name,
 				 slot);
+    }
 
 	return chars;
 }

@@ -140,7 +140,7 @@ struct inode *ocfs2_iget(struct ocfs2_super *osb, u64 blkno, unsigned flags,
 	struct inode *inode = NULL;
 	struct super_block *sb = osb->sb;
 	struct ocfs2_find_inode_args args;
-	journal_t *journal = OCFS2_SB(sb)->journal->j_journal;
+	zjournal_t *journal = OCFS2_SB(sb)->journal[smp_processor_id()]->j_journal;
 
 	trace_ocfs2_iget_begin((unsigned long long)blkno, flags,
 			       sysfile_type);
@@ -188,7 +188,7 @@ struct inode *ocfs2_iget(struct ocfs2_super *osb, u64 blkno, unsigned flags,
 	 * now it is reread from disk.
 	 */
 	if (journal) {
-		transaction_t *transaction;
+		ztransaction_t *transaction;
 		tid_t tid;
 		struct ocfs2_inode_info *oi = OCFS2_I(inode);
 
@@ -1222,7 +1222,7 @@ static void ocfs2_clear_inode(struct inode *inode)
 	 * the journal is flushed before journal shutdown. Thus it is safe to
 	 * have inodes get cleaned up after journal shutdown.
 	 */
-	jbd2_journal_release_jbd_inode(OCFS2_SB(inode->i_sb)->journal->j_journal,
+	zj_journal_release_jbd_inode(OCFS2_SB(inode->i_sb)->journal[smp_processor_id()]->j_journal,
 				       &oi->ip_jinode);
 }
 

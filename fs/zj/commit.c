@@ -952,7 +952,7 @@ start_journal_io:
 		while (!list_empty(rc)) {
 			commit_entry_t *tc = list_entry(rc->next, commit_entry_t, pos);
 
-			list_del(&tc->pos);
+			list_del_init(&tc->pos);
 			if (zj_check_mark_in_list(&commit_transaction->t_check_mark_list, tc)) {
 				/*printk(KERN_ERR "free %d, %d!!\n", tc->core, tc->tid);*/
 				zj_free_commit(tc);

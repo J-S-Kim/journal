@@ -182,7 +182,7 @@ static int ocfs2_sync_file(struct file *file, loff_t start, loff_t end,
 	struct inode *inode = file->f_mapping->host;
 	struct ocfs2_super *osb = OCFS2_SB(inode->i_sb);
 	struct ocfs2_inode_info *oi = OCFS2_I(inode);
-	journal_t *journal = osb->journal->j_journal;
+	zjournal_t *journal = osb->journal[smp_processor_id()]->j_journal;
 	int ret;
 	tid_t commit_tid;
 	bool needs_barrier = false;
@@ -201,10 +201,10 @@ static int ocfs2_sync_file(struct file *file, loff_t start, loff_t end,
 		return err;
 
 	commit_tid = datasync ? oi->i_datasync_tid : oi->i_sync_tid;
-	if (journal->j_flags & JBD2_BARRIER &&
-	    !jbd2_trans_will_send_data_barrier(journal, commit_tid))
+	if (journal->j_flags & ZJ_BARRIER &&
+	    !zj_trans_will_send_data_barrier(journal, commit_tid))
 		needs_barrier = true;
-	err = jbd2_complete_transaction(journal, commit_tid);
+	err = zj_complete_transaction(journal, commit_tid);
 	if (needs_barrier) {
 		ret = blkdev_issue_flush(inode->i_sb->s_bdev, GFP_KERNEL, NULL);
 		if (!err)
@@ -734,7 +734,7 @@ static handle_t *ocfs2_zero_start_ordered_transaction(struct inode *inode,
 		goto out;
 	}
 
-	ret = ocfs2_jbd2_file_inode(handle, inode);
+	ret = ocfs2_zj_file_inode(handle, inode);
 	if (ret < 0) {
 		mlog_errno(ret);
 		goto out;
@@ -2323,7 +2323,7 @@ static ssize_t ocfs2_file_write_iter(struct kiocb *iocb,
 			written = ret;
 
 		if (!ret) {
-			ret = jbd2_journal_force_commit(osb->journal->j_journal);
+			ret = zj_journal_force_commit(osb->journal[smp_processor_id()]->j_journal);
 			if (ret < 0)
 				written = ret;
 		}

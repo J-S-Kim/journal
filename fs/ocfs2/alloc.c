@@ -6120,8 +6120,8 @@ int ocfs2_try_to_free_truncate_log(struct ocfs2_super *osb,
 		goto out;
 	}
 
-	if (jbd2_journal_start_commit(osb->journal->j_journal, &target)) {
-		jbd2_log_wait_commit(osb->journal->j_journal, target);
+	if (zj_journal_start_commit(osb->journal[smp_processor_id()]->j_journal, &target)) {
+		zj_log_wait_commit(osb->journal[smp_processor_id()]->j_journal, target);
 		ret = 1;
 	}
 out:
@@ -6666,7 +6666,7 @@ void ocfs2_map_and_dirty_page(struct inode *inode, handle_t *handle,
 	if (ret < 0)
 		mlog_errno(ret);
 	else if (ocfs2_should_order_data(inode)) {
-		ret = ocfs2_jbd2_file_inode(handle, inode);
+		ret = ocfs2_zj_file_inode(handle, inode);
 		if (ret < 0)
 			mlog_errno(ret);
 	}
