@@ -1506,6 +1506,7 @@ int jbd2_journal_forget (handle_t *handle, struct buffer_head *bh)
 		return -EROFS;
 	journal = transaction->t_journal;
 
+	tforget_total++;
 	BUFFER_TRACE(bh, "entry");
 
 	jbd_lock_bh_state(bh);
@@ -1540,6 +1541,7 @@ int jbd2_journal_forget (handle_t *handle, struct buffer_head *bh)
 		clear_buffer_dirty(bh);
 		clear_buffer_jbddirty(bh);
 
+		tforget1++;
 		JBUFFER_TRACE(jh, "belongs to current transaction: unfile");
 
 		/*
@@ -1563,11 +1565,13 @@ int jbd2_journal_forget (handle_t *handle, struct buffer_head *bh)
 
 		spin_lock(&journal->j_list_lock);
 		if (jh->b_cp_transaction) {
+			tforget2++;
 			__jbd2_journal_temp_unlink_buffer(jh);
 			__jbd2_journal_file_buffer(jh, transaction, BJ_Forget);
 		} else {
 			__jbd2_journal_unfile_buffer(jh);
 			if (!buffer_jbd(bh)) {
+			tforget3++;
 				spin_unlock(&journal->j_list_lock);
 				jbd_unlock_bh_state(bh);
 				__bforget(bh);
@@ -1583,8 +1587,10 @@ int jbd2_journal_forget (handle_t *handle, struct buffer_head *bh)
 		JBUFFER_TRACE(jh, "belongs to older transaction");
 		/* ... but we CAN drop it from the new transaction if we
 		 * have also modified it since the original commit. */
+		tforget4++;
 
 		if (jh->b_next_transaction) {
+			tforget5++;
 			J_ASSERT(jh->b_next_transaction == transaction);
 			spin_lock(&journal->j_list_lock);
 			jh->b_next_transaction = NULL;
@@ -2169,11 +2175,13 @@ static int journal_unmap_buffer(journal_t *journal, struct buffer_head *bh,
 		 * it's a writeback-mode buffer so we don't care
 		 * if it hits disk safely. */
 		if (!jh->b_cp_transaction) {
+			tunmap1++;
 			JBUFFER_TRACE(jh, "not on any transaction: zap");
 			goto zap_buffer;
 		}
 
 		if (!buffer_dirty(bh)) {
+			tunmap2++;
 			/* bdflush has written it.  We can drop it now */
 			__jbd2_journal_remove_checkpoint(jh);
 			goto zap_buffer;
@@ -2184,6 +2192,7 @@ static int journal_unmap_buffer(journal_t *journal, struct buffer_head *bh,
 		 * journaled data... */
 
 		if (journal->j_running_transaction) {
+			tunmap3++;
 			/* ... and once the current transaction has
 			 * committed, the buffer won't be needed any
 			 * longer. */
@@ -2192,6 +2201,7 @@ static int journal_unmap_buffer(journal_t *journal, struct buffer_head *bh,
 					journal->j_running_transaction);
 			goto zap_buffer;
 		} else {
+			tunmap4++;
 			/* There is no currently-running transaction. So the
 			 * orphan record which we wrote for this file must have
 			 * passed into commit.  We must attach this buffer to
@@ -2210,6 +2220,7 @@ static int journal_unmap_buffer(journal_t *journal, struct buffer_head *bh,
 			}
 		}
 	} else if (transaction == journal->j_committing_transaction) {
+		tunmap5++;
 		JBUFFER_TRACE(jh, "on committing transaction");
 		/*
 		 * The buffer is committing, we simply cannot touch
@@ -2238,6 +2249,7 @@ static int journal_unmap_buffer(journal_t *journal, struct buffer_head *bh,
 		write_unlock(&journal->j_state_lock);
 		return 0;
 	} else {
+			tunmap6++;
 		/* Good, the buffer belongs to the running transaction.
 		 * We are writing our own transaction's data, not any
 		 * previous one's, so it is safe to throw it away

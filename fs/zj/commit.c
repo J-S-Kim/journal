@@ -43,8 +43,11 @@ static void journal_end_buffer_io_sync(struct buffer_head *bh, int uptodate)
 
 	if (orig_jh)
 		orig_bh = jh2bh(orig_jh);
-	else
+	else {
 		orig_bh = bh->b_private;
+		if (jh)
+			printk(KERN_ERR "no orig jh %p\n", bh);
+	}
 
 	BUFFER_TRACE(bh, "");
 	if (uptodate)
@@ -165,7 +168,7 @@ static int journal_submit_commit_record(zjournal_t *journal,
 
 	/*printk(KERN_ERR "%d, %d\n", journal->j_core_id, commit_transaction->t_tid);*/
 	for_each_possible_cpu(cpu) {
-		struct list_head *rc = per_cpu_ptr(commit_transaction->t_commit_list, cpu);
+		struct list_head *rc = &commit_transaction->t_commit_list[cpu];
 		commit_entry_t *tc;
 
 		list_for_each_entry(tc, rc, pos) {
@@ -594,13 +597,14 @@ void zj_journal_commit_transaction(zjournal_t *journal)
 		atomic_read(&commit_transaction->t_outstanding_credits);
 	stats.run.rs_blocks_logged = 0;
 
-	/*if (commit_transaction->t_nr_buffers >*/
-		 /*atomic_read(&commit_transaction->t_outstanding_credits)) {*/
-		/*printk(KERN_ERR "t_nr_buffers: %d, t_outstanding_credits: %d\n", */
-		/*commit_transaction->t_nr_buffers, atomic_read(&commit_transaction->t_outstanding_credits));*/
-	/*}*/
-	J_ASSERT(commit_transaction->t_nr_buffers <=
-		 atomic_read(&commit_transaction->t_outstanding_credits));
+	if (commit_transaction->t_nr_buffers >
+		 atomic_read(&commit_transaction->t_outstanding_credits)) {
+		printk(KERN_ERR "t_nr_buffers: %d, t_outstanding_credits: %d\n",
+		commit_transaction->t_nr_buffers, atomic_read(&commit_transaction->t_outstanding_credits));
+	}
+	/*J_ASSERT(commit_transaction->t_nr_buffers <=*/
+		 /*atomic_read(&commit_transaction->t_outstanding_credits));*/
+	/*printk(KERN_ERR "commit core: %d, tid: %d, buffers: %d\n", journal->j_core_id, commit_transaction->t_tid, commit_transaction->t_nr_buffers);*/
 
 	err = 0;
 	bufs = 0;
@@ -687,6 +691,7 @@ repeat_meta:
                    the shadowed buffer!  @@@ This can go if we ever get
                    rid of the shadow pairing of buffers. */
 		atomic_inc(&jh2bh(jh)->b_count);
+		/*zj_journal_grab_zjournal_head(jh2bh(jh));*/
 
 		/*
 		 * Make a temporary IO buffer with which to write it out
@@ -696,12 +701,16 @@ repeat_meta:
 		JBUFFER_TRACE(jh, "ph3: write metadata");
 		flags = zj_journal_write_metadata_buffer(commit_transaction,
 						jh, &wbuf[bufs], blocknr);
+		__brelse(jh2bh(jh));
 		if (flags < 0) {
+			/*printk(KERN_ERR "3-1 start put %p\n", jh);*/
+			/*zj_journal_put_zjournal_head(jh);*/
 			zj_journal_abort(journal, flags);
 			continue;
 		} else if (flags & 4) {
-			atomic_dec(&jh2bh(jh)->b_count);
 			clear_bit(BH_JWrite, &jh2bh(jh)->b_state);
+			/*printk(KERN_ERR "3-2 start put %p\n", jh);*/
+			/*zj_journal_put_zjournal_head(jh);*/
 			jh = commit_transaction->t_buffers;
 
 			if (!jh) 
@@ -709,8 +718,12 @@ repeat_meta:
 			goto repeat_meta;
 		}
 
+		if (!bh2jh(wbuf[bufs])->b_orig)
+			printk(KERN_ERR "write meta orig NULL\n");
 		zj_file_log_bh(&io_bufs, wbuf[bufs]);
 
+		if (!buffer_shadow(wbuf[bufs]) || !buffer_frozen(wbuf[bufs]))
+			panic("jkl");
 		/* Record the new block's tag in the current descriptor
                    buffer */
 
@@ -728,6 +741,8 @@ repeat_meta:
 		tagp += tag_bytes;
 		space_left -= tag_bytes;
 		bufs++;
+
+		/*zj_journal_put_zjournal_head(jh);*/
 
 		if (first_tag) {
 			memcpy (tagp, journal->j_uuid, 16);
@@ -870,14 +885,23 @@ start_journal_io:
 		/*J_ASSERT_BH(bh, atomic_read(&bh->b_count) == 0);*/
 		/*zj_free(bh->b_data, bh->b_size);*/
 		/*free_buffer_head(bh);*/
+		if (!bh2jh(bh)->b_orig)
+			printk(KERN_ERR "orig NULL: %p\n", bh2jh(bh));
 
 		/* We also have to refile the corresponding shadowed buffer */
 		jh = commit_transaction->t_shadow_list->b_tprev;
+		if (bh2jh(bh) != jh)
+			printk(KERN_ERR "DIFF\n");
 		bh = jh2bh(jh);
 
 		orig_jh = jh->b_orig;
+		if (!orig_jh) {
+			printk(KERN_ERR "orig_jh NULL: %p %p, io_list jh's jlist %d, shadow: %d, jwrite: %d, frozen: %d\n",jh, bh, jh->b_jlist, buffer_shadow(bh), buffer_jwrite(bh), buffer_frozen(bh));
+			panic("orig NULL");
+		}
 		orig_bh = jh2bh(orig_jh);
 
+		/*clear_bit_unlock(BH_Shadow, &bh->b_state);*/
 		clear_buffer_jwrite(bh);
 		clear_buffer_jwrite(orig_bh);
 		/*if (!buffer_jbddirty(orig_bh)) {*/
@@ -895,11 +919,7 @@ start_journal_io:
 		JBUFFER_TRACE(jh, "file as BJ_Forget");
 		zj_journal_file_buffer(jh, commit_transaction, BJ_Forget);
 		JBUFFER_TRACE(jh, "brelse shadowed buffer");
-		__brelse(bh);
-		zj_free(bh->b_data, bh->b_size);
-		if (!list_empty(&bh->b_assoc_buffers))
-			printk(KERN_ERR "%p\n", bh);
-		free_buffer_head(bh);
+		/*__brelse(bh);*/
 	}
 
 	J_ASSERT (commit_transaction->t_shadow_list == NULL);
@@ -945,8 +965,9 @@ start_journal_io:
 	// real_commit을 체크해준다.
 	int count = 0;
 	spin_lock(&commit_transaction->t_mark_lock);
+	commit_transaction->t_check_num = 0;
 	for_each_possible_cpu(cpu) {
-		struct list_head *rc = per_cpu_ptr(commit_transaction->t_commit_list, cpu);
+		struct list_head *rc = &commit_transaction->t_commit_list[cpu];
 
 		while (!list_empty(rc)) {
 			commit_entry_t *tc = list_entry(rc->next, commit_entry_t, pos);
@@ -957,11 +978,18 @@ start_journal_io:
 				zj_free_commit(tc);
 				continue;
 			}
+			/*if (tc->state != 0){*/
+				/*printk(KERN_ERR "oh shit \n");*/
+			/*}*/
+			tc->state = 0;
 			list_add(&tc->pos, &commit_transaction->t_check_mark_list); 
+			commit_transaction->t_check_num++;
 			/*printk(KERN_ERR "mark %d/%d!!%d, %d!!\n", journal->j_core_id, commit_transaction->t_tid,  tc->core, tc->tid);*/
 			count++;
 		}
 	}
+	if (commit_transaction->t_check_num_max < commit_transaction->t_check_num)
+		commit_transaction->t_check_num_max = commit_transaction->t_check_num;
 
 	if (list_empty(&commit_transaction->t_check_mark_list)) {
 		commit_transaction->t_real_commit = 1;
@@ -1011,27 +1039,32 @@ restart_loop:
 	while (commit_transaction->t_forget) {
 		ztransaction_t *cp_transaction;
 		zjournal_t *cp_journal;
-		struct buffer_head *orig_bh;
+		struct buffer_head *frozen_bh, *orig_bh;
 		struct zjournal_head *orig_jh;
 		int try_to_free = 0;
 
 		jh = commit_transaction->t_forget;
+		frozen_bh = jh2bh(jh);
 		spin_unlock(&journal->j_list_lock);
-		/*bh = jh2bh(jh);*/
 
-		/*if (!jh)*/
-			/*printk(KERN_ERR "1111\n");*/
-
-		orig_jh = jh->b_orig;
-		if (!orig_jh) {
+		if (!buffer_frozen(frozen_bh)) {
+		/*if (!orig_jh || buffer_frozen(jh2bh(orig_jh))) {*/
 			/*
 			 *아마 거의 100% forget을 통해 frozne copy가 아닌 orig bh가 바로 온 케이스
 			 *거기에 맞춰 처리
 			 */
 			orig_jh = jh;
 			jh = NULL;
-		}
+			frozen_bh = NULL;
+			if (buffer_frozen(jh2bh(orig_jh))) {
+				printk(KERN_ERR "Is frozen1 jh:%p, orig:%p\n", jh, orig_jh);
+				printk(KERN_ERR "Change jh: %p, orig_jh %p\n", jh, orig_jh);
+			}
+		} else
+			orig_jh = jh->b_orig;
+
 		orig_bh = jh2bh(orig_jh);
+
 		/*
 		 * Get a reference so that bh cannot be freed before we are
 		 * done with it.
@@ -1111,7 +1144,16 @@ restart_loop:
 			 * pagesize and it is attached to the last partial
 			 * page.
 			 */
+			/*
+			 * 원래 unmap을 통해 freed가 set되면 항상 이전에 commit중이던게
+			 * 이곳에 먼저 도달하게 되고, 여길 통과하고 아래 refile을 통해
+			 * 다음 tx의 forget으로 전달.
+			 * 그런데 지금은 그렇지 않고 바로 forget에 매달려 있으며, 
+			 * 심지어는 forget의 tx가 여기에 먼저 도달할 수 있음
+			 * 따라서 두 가지 케이스를 모두 고려하며 코드를 수정해야함
+			 */
 			orig_jh->b_modified = 0;
+			clear_buffer_freed(orig_bh);
 			if (!orig_jh->b_next_transaction) {
 				clear_buffer_freed(orig_bh);
 				clear_buffer_jbddirty(orig_bh);
@@ -1121,6 +1163,7 @@ restart_loop:
 				orig_bh->b_bdev = NULL;
 			}
 		}
+
 
 		if (buffer_jbddirty(orig_bh)) {
 			JBUFFER_TRACE(orig_jh, "add to new checkpointing trans");
@@ -1139,43 +1182,61 @@ restart_loop:
 			 * disk and before we process the buffer on BJ_Forget
 			 * list.
 			 */
-			if (!orig_jh->b_transaction)
+			if (!orig_jh->b_cpcount)
 				try_to_free = 1;
 		}
 
 		JBUFFER_TRACE(orig_jh, "refile or unfile buffer");
 
 		if (!jh) {
+			J_ASSERT_BH(orig_bh, !buffer_dirty(orig_bh));
+			if (!orig_jh->b_cpcount)
+				try_to_free = 1;
+
 			__zj_journal_refile_buffer(orig_jh);
-			goto skip_frozen;
-		}
 
-		//unlink & free shadow jh
-		clear_buffer_shadow(orig_bh);
-		--orig_jh->b_cpcount;
+		} else {
+			//unlink & free shadow jh
+			/*clear_buffer_shadow(orig_bh);*/
+			--orig_jh->b_cpcount;
+			if (orig_jh->b_cpcount < 0)
+				printk(KERN_ERR "jh %p: frozen %d, ojh %p: frozen: %d, blocknr: %d, ojh's orig: %p, ojh's list: %d\n", jh, buffer_frozen(jh2bh(jh)), orig_jh, buffer_frozen(jh2bh(orig_jh)), orig_jh->b_bh->b_blocknr, orig_jh->b_orig, orig_jh->b_jlist);
 
-		if (commit_transaction->t_forget == jh) {
-			commit_transaction->t_forget = jh->b_tnext;
-			if (commit_transaction->t_forget == jh)
-				commit_transaction->t_forget = NULL;
-		}
-		jh->b_tprev->b_tnext = jh->b_tnext;
-		jh->b_tnext->b_tprev = jh->b_tprev;
+			if (commit_transaction->t_forget == jh) {
+				commit_transaction->t_forget = jh->b_tnext;
+				if (commit_transaction->t_forget == jh)
+					commit_transaction->t_forget = NULL;
+			}
+			jh->b_tprev->b_tnext = jh->b_tnext;
+			jh->b_tnext->b_tprev = jh->b_tprev;
 
-		if (orig_jh->b_orig == jh)
-			orig_jh->b_orig = NULL;
+			if (orig_jh->b_orig == jh) {
+				if (orig_jh->b_jlist == 3)
+					printk(KERN_ERR "orig NULL, orig: %p, copy: %p, orig list: %d, frozen: %d\n", orig_jh, jh, orig_jh->b_jlist, buffer_frozen(orig_bh));
+				orig_jh->b_orig = NULL;
+			}
 
-		--jh->b_jcount;
-		journal_free_zjournal_head(jh);
+			--jh->b_jcount;
+			journal_free_zjournal_head(jh);
 
-skip_frozen:
-		/*__zj_journal_refile_buffer(orig_jh);*/
-		if (orig_jh->b_transaction == NULL && !orig_jh->b_cpcount && 
-				test_clear_buffer_jbddirty(orig_bh)) {
-			mark_buffer_dirty(orig_bh);	/* Expose it to the VM */
+			zj_free(frozen_bh->b_data, frozen_bh->b_size);
+			if (!list_empty(&frozen_bh->b_assoc_buffers))
+				printk(KERN_ERR "%p\n", frozen_bh);
+			free_buffer_head(frozen_bh);
+
+			if (!orig_jh->b_cpcount) {
+				if (!buffer_jbddirty(orig_bh)) {
+					try_to_free = 1;
+				} else if (orig_jh->b_transaction == NULL && !orig_jh->b_cpcount && 
+						test_clear_buffer_jbddirty(orig_bh)) {
+					mark_buffer_dirty(orig_bh);	/* Expose it to the VM */
+				}
+			}
+			/*printk(KERN_ERR "2 start put %p\n", orig_jh);*/
 			zj_journal_put_zjournal_head(orig_jh);
 		}
 
+skip_frozen:
 		jbd_unlock_bh_state(orig_bh);
 
 		if (try_to_free)
@@ -1220,6 +1281,21 @@ skip_frozen:
 			commit_transaction;
 		commit_transaction->t_cpprev->t_cpnext =
 				commit_transaction;
+	}
+
+	if (commit_transaction->t_checkpoint_list == NULL &&
+		commit_transaction->t_checkpoint_io_list == NULL) {
+		/*printk(KERN_ERR "cp list NULL = real commit\n");*/
+		commit_transaction->t_real_commit = 1;
+		spin_lock(&commit_transaction->t_mark_lock);
+		while(!list_empty(&commit_transaction->t_check_mark_list)) {
+			commit_entry_t *tc = list_entry(commit_transaction->t_check_mark_list.next, 
+							commit_entry_t, pos);
+			list_del(&tc->pos);
+			zj_free_commit(tc);
+			commit_transaction->t_check_num--;
+		}
+		spin_unlock(&commit_transaction->t_mark_lock);
 	}
 	spin_unlock(&journal->j_list_lock);
 

@@ -83,51 +83,70 @@ static inline void __buffer_relink_io(struct zjournal_head *jh)
 }
 
 static inline void __zj_mark_enqueue(ztransaction_t *transaction, 
-					ztransaction_t *rel_transaction)
+					ztransaction_t *rel_transaction, commit_mark_t *buf)
 {
-	commit_entry_t *tc;
+	commit_entry_t *tc, *tc_next;
 	int repeat, checkpoint = 0, checkpointing;
-	int i, index = 0, jid;
+	int i, index, jid;
+	int check_num;
 	tid_t tid;
 	zjournal_t *journal = transaction->t_journal;
+	LIST_HEAD(new_list);
 	LIST_HEAD(mark_list);
-	commit_mark_t *buf = journal->j_cbuf;
+	/*commit_mark_t *buf = journal->j_cbuf;*/
 
 	J_ASSERT(rel_transaction->t_state == T_FINISHED);
 
-	spin_lock(&journal->j_mark_lock);
-	if (transaction->t_journal->j_cbuf_debug)
-		printk(KERN_ERR "Using cbuf another place, need lock?\n");
+	/*spin_lock(&journal->j_mark_lock);*/
+	/*if (transaction->t_journal->j_cbuf_debug)*/
+		/*printk(KERN_ERR "Using cbuf another place, need lock?\n");*/
 
-	transaction->t_journal->j_cbuf_debug = 1;
+	/*transaction->t_journal->j_cbuf_debug = 1;*/
 	
 repeat_search:
 	repeat = 0;
+	index = 0;
+	check_num = 0;
 	checkpointing = checkpoint;
 	// mark 임시 저장을 위한 어레이 하나 만들어서
 	// 거기에 한번에 rel_transaction 관련 쭉 넣고
 	// 그 어레이를 이용하여 체크 및 할당과 insertion 수행하는 것이 좋겠다.
 	spin_lock(&rel_transaction->t_mark_lock);
 	list_for_each_entry(tc, &rel_transaction->t_check_mark_list, pos) {
-		if (index == ZJ_NR_COMMIT) {
-			spin_unlock(&rel_transaction->t_mark_lock);
-			repeat = 1;
-			checkpoint += index;
-			goto list_add;
-		}
-		while (checkpointing) {
-			list_next_entry(tc, pos);
-			checkpointing--;
-		}
-		buf[index].core = tc->core;
-		buf[index].tid = tc->tid;
+		commit_entry_t *new_mark;
+		/*if (index == ZJ_NR_COMMIT) {*/
+			/*spin_unlock(&rel_transaction->t_mark_lock);*/
+			/*repeat = 1;*/
+			/*checkpoint += index;*/
+			/*printk(KERN_ERR "t: %p, rt: %p, rt_num: %d, %d\n", transaction, rel_transaction, rel_transaction->t_check_num, checkpoint);*/
+			/*break;*/
+			/*goto list_add;*/
+		/*}*/
+		/*while (checkpointing) {*/
+			/*list_next_entry(tc, pos);*/
+			/*checkpointing--;*/
+			/*if (&tc->pos == &rel_transaction->t_check_mark_list) {*/
+				/*printk(KERN_ERR "222// t: %p, rt: %p, %d\n", transaction, rel_transaction, checkpointing);*/
+				/*break;*/
+			/*}*/
+		/*}*/
+		/*buf[index].core = tc->core;*/
+		/*buf[index].tid = tc->tid;*/
 		index++;
+		new_mark = zj_alloc_commit(GFP_KERNEL);
+		new_mark->core = tc->core;
+		new_mark->tid = tc->tid;
+		new_mark->state = 0;
+		list_add(&new_mark->pos, &mark_list);
+		check_num++;
+		if (check_num > rel_transaction->t_check_num)
+			printk(KERN_ERR "mark insert: %d", check_num);
 	}
 	spin_unlock(&rel_transaction->t_mark_lock);
 
 	if (!index) {
-		transaction->t_journal->j_cbuf_debug = 0;
-		spin_unlock(&journal->j_mark_lock);
+		/*transaction->t_journal->j_cbuf_debug = 0;*/
+		/*spin_unlock(&journal->j_mark_lock);*/
 		return;
 	}
 
@@ -135,51 +154,73 @@ list_add:
 	jid = transaction->t_journal->j_core_id;
 	tid = transaction->t_tid;
 
+		
+	/*for (i = index-1; i>=0; i--) {*/
+		/*commit_entry_t *new_mark;*/
+		/*int mark_core = buf[i].core;*/
+		/*int mark_tid = buf[i].tid;*/
+		
+		/*if (mark_tid == 0)*/
+			/*continue;*/
+		//새로 넣어야 한다.
+		// mark 할당 후 transaction의 check list에 삽입
+	/*}*/
+
 	// 일단 미리 할당해서 만들어놓고 임시 리스트에 걸어놓는다.
 	spin_lock(&transaction->t_mark_lock);
-	for (i = 0; i < index; i++) {
-		int mark_core = buf[i].core;
-		int mark_tid = buf[i].tid;
-		// 해당 mark가 현재 처리 중인 TX에 해당하는 것이면
-		// 넣지 않고 넘어간다.
-		/*printk(KERN_ERR "index %d/%d     %d/%d", jid,tid,mark_core,mark_tid);*/
+	tc_next = list_entry(mark_list.next, commit_entry_t, pos);
+	do {
+		int mark_core, mark_tid;
+		tc = tc_next;
+		tc_next = list_next_entry(tc, pos);
+
+		mark_core = tc->core;
+		mark_tid = tc->tid;
 		if ((tid == mark_tid && jid == mark_core) ||
 		// trasaction의 check나 complete list에 있는가?
 			zj_check_mark_value_in_list(&transaction->t_complete_mark_list, 
 						mark_core, mark_tid) ||
 			zj_check_mark_value_in_list(&transaction->t_check_mark_list, 
 					mark_core, mark_tid)) {
-			buf[i].tid = 0;
+			list_del(&tc->pos);
+			zj_free_commit(tc);
+			check_num--;
 		}
-	}
-	spin_unlock(&transaction->t_mark_lock);
-		
-	while (index--) {
-		commit_entry_t *new_mark;
-		int mark_core = buf[index].core;
-		int mark_tid = buf[index].tid;
-		
-		if (mark_tid == 0)
-			continue;
-		//새로 넣어야 한다.
-		// mark 할당 후 transaction의 check list에 삽입
-		new_mark = zj_alloc_commit(GFP_KERNEL);
-		new_mark->core = mark_core;
-		new_mark->tid = mark_tid;
-		list_add(&new_mark->pos, &mark_list);
-	}
+	} while(&mark_list != &tc_next->pos);
+	/*list_for_each_entry(tc, &mark_list, pos) {*/
+	/*}*/
+	/*for (i = 0; i < index; i++) {*/
+		/*int mark_core = buf[i].core;*/
+		/*int mark_tid = buf[i].tid;*/
+		// 해당 mark가 현재 처리 중인 TX에 해당하는 것이면
+		// 넣지 않고 넘어간다.
+		/*printk(KERN_ERR "index %d/%d     %d/%d", jid,tid,mark_core,mark_tid);*/
+		/*if ((tid == mark_tid && jid == mark_core) ||*/
+		// trasaction의 check나 complete list에 있는가?
+			/*zj_check_mark_value_in_list(&transaction->t_complete_mark_list, */
+						/*mark_core, mark_tid) ||*/
+			/*zj_check_mark_value_in_list(&transaction->t_check_mark_list, */
+					/*mark_core, mark_tid)) {*/
+			/*buf[i].tid = 0;*/
+		/*}*/
+	/*}*/
+	/*spin_unlock(&transaction->t_mark_lock);*/
 
-	spin_lock(&transaction->t_mark_lock);
+	/*spin_lock(&transaction->t_mark_lock);*/
 	// temp list의 mark 들을 transaction의 check mark list로 이동
-	list_splice_tail(&mark_list, &transaction->t_check_mark_list);
+	list_splice_tail_init(&mark_list, &transaction->t_check_mark_list);
+	transaction->t_check_num += check_num;
+	if (transaction->t_check_num_max < transaction->t_check_num)
+		transaction->t_check_num_max = transaction->t_check_num;
 	spin_unlock(&transaction->t_mark_lock);
+	/*printk(KERN_ERR "mark insert: %d", check_num);*/
 
 	if (repeat)
 		goto repeat_search;
 
 	/*printk(KERN_ERR "end enqueu\n");*/
-	transaction->t_journal->j_cbuf_debug = 0;
-	spin_unlock(&journal->j_mark_lock);
+	/*transaction->t_journal->j_cbuf_debug = 0;*/
+	/*spin_unlock(&journal->j_mark_lock);*/
 	return;
 }
 
@@ -188,32 +229,73 @@ static int __zj_cp_real_commit(ztransaction_t *transaction, int force)
 	ztransaction_t *rel_transaction;
 	zjournal_t *rel_journal;
 	zjournal_t *journal = transaction->t_journal;
+	commit_mark_t *buf;
+	commit_entry_t *cur_mark = NULL;
+	int print=0;
 
-	
+	spin_lock(&journal->j_list_lock);
+	if (transaction->t_checkpoint_list == NULL &&
+		transaction->t_checkpoint_io_list == NULL)
+	{
+		/*printk(KERN_ERR "2 NULL in cp real\n");*/
+		spin_lock(&transaction->t_mark_lock);
+		while(!list_empty(&transaction->t_check_mark_list)) {
+			commit_entry_t *tc = list_entry(transaction->t_check_mark_list.next, 
+							commit_entry_t, pos);
+			list_del(&tc->pos);
+			zj_free_commit(tc);
+			transaction->t_check_num--;
+		}
+		transaction->t_real_commit = 1;
+		spin_unlock(&transaction->t_mark_lock);
+		spin_unlock(&journal->j_list_lock);
+		return 0;
+	}
+	spin_unlock(&journal->j_list_lock);
+	buf = kmalloc_array(ZJ_NR_COMMIT, sizeof(commit_mark_t),
+					GFP_KERNEL);
+
+recheck:
 	spin_lock(&transaction->t_mark_lock);
-	transaction->t_real_committing = 1;
+	/*transaction->t_real_committing = 1;*/
 	while (!list_empty(&transaction->t_check_mark_list)) {
-		commit_entry_t *cur_mark = list_entry(transaction->t_check_mark_list.next, 
+		cur_mark = list_entry(transaction->t_check_mark_list.next, 
 							commit_entry_t, pos);
 
 		/*printk(KERN_ERR "start %d/%d\n", transaction->t_journal->j_core_id, transaction->t_tid);*/
 		/*printk(KERN_ERR "mark %d, %d\n",cur_mark->core, cur_mark->tid);*/
-		if (cur_mark->state) {
-			spin_unlock(&transaction->t_mark_lock);
-
-			while(cur_mark->state) {
-				/*printk(KERN_ERR "now wait mark %d/%d\n", cur_mark->core, cur_mark->tid);*/
-			}
+retry_mark:
+		if (cur_mark->state == 1) {
+			/*spin_unlock(&transaction->t_mark_lock);*/
 
 			if (unlikely(ZERO_OR_NULL_PTR(transaction))) {
-				transaction->t_real_committing = 0;
+				/*transaction->t_real_committing = 0;*/
+				spin_unlock(&transaction->t_mark_lock);
+				kfree(buf);
 				return 2;
 			}
 
-			spin_lock(&transaction->t_mark_lock);
+			if (list_is_last(&cur_mark->pos, &transaction->t_check_mark_list)){
+				spin_unlock(&transaction->t_mark_lock);
+				if (!force) {
+					kfree(buf);
+					return 1;
+				} else {
+					/*printk(KERN_ERR "now wait mark %p %d/%d\n", cur_mark, cur_mark->core, cur_mark->tid);*/
+					schedule();
+					goto recheck;
+				}
+			}
+
+			cur_mark = list_next_entry(cur_mark, pos);
+			goto retry_mark;
+
+
+			/*spin_unlock(&transaction->t_mark_lock);*/
+
+			/*spin_lock(&transaction->t_mark_lock);*/
 			/*printk(KERN_ERR "%p, %d, %d\n",transaction, transaction->t_real_commit,*/
 					/*list_empty(&transaction->t_check_mark_list));*/
-			continue;
 		}
 
 		cur_mark->state = 1;
@@ -221,9 +303,10 @@ static int __zj_cp_real_commit(ztransaction_t *transaction, int force)
 
 		rel_transaction = zj_get_target_transaction(journal, 
 				cur_mark->core, cur_mark->tid);
-		if (!rel_transaction)
-			// 어떤 케이스가 있을지는 모르겠지만 우선 당장에 생각나는 것은
-			// 하나인데, 그냥 real commit되어서 사라졌다라는것
+
+		// 어떤 케이스가 있을지는 모르겠지만 우선 당장에 생각나는 것은
+		// 하나인데, 그냥 real commit되어서 사라졌다라는것
+		if (!rel_transaction || transaction == rel_transaction)
 			goto mark_complete;
 
 		spin_lock(&rel_transaction->t_mark_lock);
@@ -242,10 +325,11 @@ static int __zj_cp_real_commit(ztransaction_t *transaction, int force)
 			if (!force) {
 				/*printk(KERN_ERR "force close\n");*/
 				spin_lock(&transaction->t_mark_lock);
-				transaction->t_real_committing = 0;
+				/*transaction->t_real_committing = 0;*/
 				cur_mark->state = 0;
 				spin_unlock(&transaction->t_mark_lock);
-				return 1;
+				kfree(buf);
+				return 3;
 			}
 
 			/*printk(KERN_ERR "wait TX\n");*/
@@ -256,21 +340,34 @@ static int __zj_cp_real_commit(ztransaction_t *transaction, int force)
 		read_unlock(&rel_journal->j_state_lock);
 
 		// rel_transaction의 check list에 있는 mark들을 enqueue
-		__zj_mark_enqueue(transaction, rel_transaction);
+		__zj_mark_enqueue(transaction, rel_transaction, buf);
 
 mark_complete:
 		spin_lock(&transaction->t_mark_lock);
 		// complete list로 이동
-		cur_mark->state = 0;
 		list_del(&cur_mark->pos);
-		list_add(&cur_mark->pos, &transaction->t_complete_mark_list);
+		transaction->t_check_num--;
+		cur_mark->state = 0;
+		if (rel_transaction == transaction || 
+			zj_check_mark_value_in_list(&transaction->t_complete_mark_list, 
+				cur_mark->core, cur_mark->tid)) {
+			zj_free_commit(cur_mark);
+		} else
+			list_add(&cur_mark->pos, &transaction->t_complete_mark_list);
+
+		if (unlikely(ZERO_OR_NULL_PTR(transaction))) {
+			spin_unlock(&transaction->t_mark_lock);
+			kfree(buf);
+			return 2;
+		}
 	}
 
 	if (!transaction->t_real_commit)
 		transaction->t_real_commit = 1;
 
-	transaction->t_real_committing = 0;
+	/*transaction->t_real_committing = 0;*/
 	spin_unlock(&transaction->t_mark_lock);
+	kfree(buf);
 	/*printk(KERN_ERR "real commit TX %d\n", transaction->t_tid);*/
 
 	return 0;
@@ -448,12 +545,12 @@ restart:
 	// real commit이 아니면 real commit이 될 때까지BFS 진행
 	spin_lock(&transaction->t_mark_lock);
 	if (!transaction->t_real_commit) {
-		if (transaction->t_real_committing) {
+		/*if (transaction->t_real_committing) {*/
 		/*printk(KERN_ERR "1 %p\n", transaction);*/
-			spin_unlock(&transaction->t_mark_lock);
-			spin_unlock(&journal->j_list_lock);
-			goto retry_real;
-		}
+			/*spin_unlock(&transaction->t_mark_lock);*/
+			/*spin_unlock(&journal->j_list_lock);*/
+			/*goto retry_real;*/
+		/*}*/
 		spin_unlock(&transaction->t_mark_lock);
 		spin_unlock(&journal->j_list_lock);
 		/*printk(KERN_ERR "1 %p\n", transaction);*/
@@ -752,6 +849,7 @@ void __zj_journal_clean_checkpoint_list(zjournal_t *journal, bool destroy)
 {
 	ztransaction_t *transaction, *last_transaction, *next_transaction;
 	int ret, rt = 0;
+	commit_entry_t *mark;
 
 	transaction = journal->j_checkpoint_transactions;
 	if (!transaction)
@@ -762,6 +860,9 @@ void __zj_journal_clean_checkpoint_list(zjournal_t *journal, bool destroy)
 	do {
 		// FIXME list lock을 풀고 real commit 하는데 
 		// 그동안 cp TX list가 바뀌면?
+		if (ZERO_OR_NULL_PTR(next_transaction)) {
+			next_transaction = journal->j_checkpoint_transactions;
+		}
 		transaction = next_transaction;
 		next_transaction = transaction->t_cpnext;
 
@@ -770,11 +871,11 @@ void __zj_journal_clean_checkpoint_list(zjournal_t *journal, bool destroy)
 
 		spin_lock(&transaction->t_mark_lock);
 		if (!transaction->t_real_commit) {
-			if (transaction->t_real_committing) {
+			/*if (transaction->t_real_committing) {*/
 			/*printk(KERN_ERR "2 %p\n", transaction);*/
-				spin_unlock(&transaction->t_mark_lock);
-				continue;
-			}
+				/*spin_unlock(&transaction->t_mark_lock);*/
+				/*continue;*/
+			/*}*/
 			spin_unlock(&transaction->t_mark_lock);
 			spin_unlock(&journal->j_list_lock);
 
@@ -788,10 +889,12 @@ void __zj_journal_clean_checkpoint_list(zjournal_t *journal, bool destroy)
 				transaction->t_checkpoint_list == NULL &&
 				transaction->t_checkpoint_io_list == NULL) {
 					__zj_journal_drop_transaction(journal, transaction);
-					/*printk(KERN_ERR "A free TX %p\n", transaction);*/
+					/*printk(KERN_ERR "A free TX core: %d, tid: %d, %p\n", transaction->t_journal->j_core_id, transaction->t_tid, transaction);*/
 					zj_journal_free_transaction(transaction);
-				} else
+				} else {
+					/*printk(KERN_ERR "A dirty TX: %d, tid: %d, %p\n", transaction->t_journal->j_core_id, transaction->t_tid, transaction);*/
 					journal_dirty_one_cp_list(transaction->t_checkpoint_list);
+				}
 				continue;
 			}
 			// real commit에 실패했으므로 걍 여기서 끝
@@ -977,6 +1080,7 @@ void __zj_journal_insert_checkpoint(struct zjournal_head *jh,
 void __zj_journal_drop_transaction(zjournal_t *journal, ztransaction_t *transaction)
 {
 	assert_spin_locked(&journal->j_list_lock);
+	/*printk(KERN_ERR "drop TX %d // %d\n", journal->j_core_id, transaction->t_tid);*/
 	if (transaction->t_cpnext) {
 		transaction->t_cpnext->t_cpprev = transaction->t_cpprev;
 		transaction->t_cpprev->t_cpnext = transaction->t_cpnext;
@@ -989,7 +1093,11 @@ void __zj_journal_drop_transaction(zjournal_t *journal, ztransaction_t *transact
 		transaction->t_cpnext = transaction->t_cpprev = NULL;
 	}
 
-	free_percpu(transaction->t_commit_list);
+	/*printk(KERN_ERR "max: %d\n", transaction->t_check_num_max);*/
+
+	zj_journal_free_commit_list(transaction->t_commit_list);
+
+	J_ASSERT(list_empty(&transaction->t_check_mark_list));
 
 	J_ASSERT(transaction->t_real_commit == 1);
 	J_ASSERT(transaction->t_state == T_FINISHED);

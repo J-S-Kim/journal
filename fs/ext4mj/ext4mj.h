@@ -1088,6 +1088,7 @@ struct ext4mj_inode_info {
 	 */
 	tid_t i_sync_tid;
 	tid_t i_datasync_tid;
+    unsigned int i_sync_num;
 
 #ifdef CONFIG_QUOTA
 	struct dquot *i_dquot[MAXQUOTAS];

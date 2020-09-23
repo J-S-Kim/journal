@@ -72,6 +72,9 @@ void __zj_debug(int level, const char *file, const char *func,
 extern void *zj_alloc(size_t size, gfp_t flags);
 extern void zj_free(void *ptr, size_t size);
 
+extern int tunmap_total, tunmap1, tunmap2, tunmap3, tunmap4, tunmap5, tunmap6, tunmap7, tunmap8;
+extern int tforget_total, tforget1, tforget2, tforget3, tforget4, tforget5, tforget6, tforget7, tforget8;
+
 #define ZJ_MIN_JOURNAL_BLOCKS 1024
 
 #ifdef __KERNEL__
@@ -192,7 +195,7 @@ typedef struct commit_mark_s {
 } commit_mark_t;
 
 typedef struct commit_entry_s {
-    __u16		state:1;
+    __u16		state;
     __u16		core;
     __u32		tid;
     struct list_head pos;
@@ -338,6 +341,7 @@ enum jbd_state_bits {
 	BH_State,		/* Pins most zjournal_head state */
 	BH_JournalHead,		/* Pins bh->b_private and jh->b_bh */
 	BH_Shadow,		/* IO on shadow buffer is running */
+	BH_Frozen,		/* IO on shadow buffer is running */
     BH_Verified,		/* Metadata block has been verified ok */
     BH_MetaDirty,       /* Metadata block has been verified ok */
     BH_Checkpoint,      /* Metadata block has been verified ok */
@@ -354,6 +358,7 @@ BUFFER_FNS(RevokeValid, revokevalid)
 TAS_BUFFER_FNS(RevokeValid, revokevalid)
 BUFFER_FNS(Freed, freed)
 BUFFER_FNS(Shadow, shadow)
+BUFFER_FNS(Frozen, frozen)
 BUFFER_FNS(Verified, verified)
 BUFFER_FNS(MetaDirty, metadirty)
 BUFFER_FNS(Checkpoint, checkpoint)
@@ -660,6 +665,8 @@ struct ztransaction_s
 
 	struct list_head	t_check_mark_list;
 	struct list_head	t_complete_mark_list;
+    int t_check_num;
+    int t_check_num_max;
 
     struct list_head  *t_commit_list;
 	spinlock_t		t_mark_lock;
@@ -784,7 +791,7 @@ zj_time_diff(unsigned long start, unsigned long end)
 }
 
 #define ZJ_NR_BATCH	64
-#define ZJ_NR_COMMIT	512
+#define ZJ_NR_COMMIT	80
 
 /**
  * struct journal_s - The journal_s type is the concrete type associated with
@@ -1377,6 +1384,7 @@ extern void		__wait_on_journal (zjournal_t *);
 extern void zj_journal_destroy_transaction_cache(void);
 extern int  zj_journal_init_transaction_cache(void);
 extern void zj_journal_free_transaction(ztransaction_t *);
+extern void zj_journal_free_commit_list(struct list_head *commit_list);
 
 /*
  * Journal locking.

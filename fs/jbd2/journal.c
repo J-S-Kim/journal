@@ -102,6 +102,9 @@ EXPORT_SYMBOL(jbd2_journal_release_jbd_inode);
 EXPORT_SYMBOL(jbd2_journal_begin_ordered_truncate);
 EXPORT_SYMBOL(jbd2_inode_cache);
 
+int tunmap1, tunmap2, tunmap3, tunmap4, tunmap5, tunmap6;
+int tforget_total, tforget1, tforget2, tforget3, tforget4, tforget5, tforget6;
+
 static void __journal_abort_soft (journal_t *journal, int errno);
 static int jbd2_journal_create_slab(size_t slab_size);
 
@@ -1002,28 +1005,27 @@ static int jbd2_seq_info_show(struct seq_file *seq, void *v)
 		   s->journal->j_max_transaction_buffers);
 	if (s->stats->ts_tid == 0)
 		return 0;
-	seq_printf(seq, "average: \n  %ums waiting for transaction\n",
-	    jiffies_to_msecs(s->stats->run.rs_wait / s->stats->ts_tid));
-	seq_printf(seq, "  %ums request delay\n",
+	seq_printf(seq, "average: \n  %u ms waiting for transaction\n",
+	    jiffies_to_msecs(s->stats->run.rs_wait));
+	seq_printf(seq, "  %u ms request delay\n",
 	    (s->stats->ts_requested == 0) ? 0 :
-	    jiffies_to_msecs(s->stats->run.rs_request_delay /
-			     s->stats->ts_requested));
-	seq_printf(seq, "  %ums running transaction\n",
-	    jiffies_to_msecs(s->stats->run.rs_running / s->stats->ts_tid));
-	seq_printf(seq, "  %ums transaction was being locked\n",
-	    jiffies_to_msecs(s->stats->run.rs_locked / s->stats->ts_tid));
-	seq_printf(seq, "  %ums flushing data (in ordered mode)\n",
-	    jiffies_to_msecs(s->stats->run.rs_flushing / s->stats->ts_tid));
-	seq_printf(seq, "  %ums logging transaction\n",
-	    jiffies_to_msecs(s->stats->run.rs_logging / s->stats->ts_tid));
-	seq_printf(seq, "  %lluus average transaction commit time\n",
-		   div_u64(s->journal->j_average_commit_time, 1000));
+	    jiffies_to_msecs(s->stats->run.rs_request_delay));
+	seq_printf(seq, "  %u ms running transaction\n",
+	    jiffies_to_msecs(s->stats->run.rs_running));
+	seq_printf(seq, "  %u ms transaction was being locked\n",
+	    jiffies_to_msecs(s->stats->run.rs_locked));
+	seq_printf(seq, "  %u ms flushing data (in ordered mode)\n",
+	    jiffies_to_msecs(s->stats->run.rs_flushing));
+	seq_printf(seq, "  %u ms logging transaction\n",
+	    jiffies_to_msecs(s->stats->run.rs_logging));
+	seq_printf(seq, "  %llu us average transaction commit time\n",
+		   s->journal->j_average_commit_time);
 	seq_printf(seq, "  %lu handles per transaction\n",
-	    s->stats->run.rs_handle_count / s->stats->ts_tid);
+	    s->stats->run.rs_handle_count );
 	seq_printf(seq, "  %lu blocks per transaction\n",
-	    s->stats->run.rs_blocks / s->stats->ts_tid);
+	    s->stats->run.rs_blocks );
 	seq_printf(seq, "  %lu logged blocks per transaction\n",
-	    s->stats->run.rs_blocks_logged / s->stats->ts_tid);
+	    s->stats->run.rs_blocks_logged );
 	return 0;
 }
 
@@ -1142,6 +1144,21 @@ static journal_t *journal_init_common(struct block_device *bdev,
 	journal->j_min_batch_time = 0;
 	journal->j_max_batch_time = 15000; /* 15ms */
 	atomic_set(&journal->j_reserved_credits, 0);
+
+	tunmap1 = 0;
+	tunmap2 = 0;
+	tunmap3 = 0;
+	tunmap4 = 0;
+	tunmap5 = 0;
+	tunmap6 = 0;
+
+	tforget_total = 0;
+	tforget1 = 0;
+	tforget2 = 0;
+	tforget3 = 0;
+	tforget4 = 0;
+	tforget5 = 0;
+	tforget6 = 0;
 
 	/* The journal is marked for error until we succeed with recovery! */
 	journal->j_flags = JBD2_ABORT;
@@ -1756,6 +1773,9 @@ int jbd2_journal_destroy(journal_t *journal)
 			err = -EIO;
 		brelse(journal->j_sb_buffer);
 	}
+
+	printk(KERN_ERR "tunmap: %d, %d, %d, %d, %d, %d\n", tunmap1, tunmap2, tunmap3, tunmap4, tunmap5, tunmap6);
+	printk(KERN_ERR "tforget: %d, %d, %d, %d, %d, %d, %d\n", tforget_total, tforget1, tforget2, tforget3, tforget4, tforget5, tforget6);
 
 	if (journal->j_proc_entry)
 		jbd2_stats_proc_exit(journal);

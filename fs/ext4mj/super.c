@@ -4744,6 +4744,8 @@ static int ext4mj_load_journals_left(struct super_block *sb,
 			     zjournal_t *journal, int core_id)
 {
 	int err = 0;
+	int num_cpu = num_online_cpus();
+	int core;
 
 	if (!(journal->j_flags & ZJ_BARRIER))
 		ext4mj_msg(sb, KERN_INFO, "barriers disabled");
@@ -4755,7 +4757,16 @@ static int ext4mj_load_journals_left(struct super_block *sb,
 		if(save)
 			memcpy(save, ((char *) es) +
 					EXT4MJ_S_ERR_START, EXT4MJ_S_ERR_LEN);
-		err = zj_journal_load(journal, core_id);
+		/*if (num_cpu <= 20)*/
+			/*core = 2;*/
+		/*else if (num_cpu <= 40)*/
+			/*core = 4;*/
+		/*else if (num_cpu <= 60)*/
+			/*core = 6;*/
+		/*else if (num_cpu <= 80)*/
+			/*core = 8;*/
+		/*core = num_cpu/core;*/
+		err = zj_journal_load(journal, core_id*5);
 		if(save)
 			memcpy(((char *) es) + EXT4MJ_S_ERR_START,
 					save, EXT4MJ_S_ERR_LEN);

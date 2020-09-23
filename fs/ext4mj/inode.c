@@ -4822,6 +4822,7 @@ struct inode *ext4mj_iget(struct super_block *sb, unsigned long ino)
 			tid = journal->j_commit_sequence;
 		read_unlock(&journal->j_state_lock);
 		ei->i_sync_tid = tid;
+		ei->i_sync_num++;
 		ei->i_datasync_tid = tid;
 	}
 

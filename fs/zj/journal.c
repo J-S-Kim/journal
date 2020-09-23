@@ -112,6 +112,9 @@ EXPORT_SYMBOL(zj_commit_cache);
 static void __journal_abort_soft (zjournal_t *journal, int errno);
 static int zj_journal_create_slab(size_t slab_size);
 
+int tunmap_total, tunmap1, tunmap2, tunmap3, tunmap4, tunmap5, tunmap6, tunmap7, tunmap8;
+int tforget_total, tforget1, tforget2, tforget3, tforget4, tforget5, tforget6, tforget7, tforget8;
+
 #ifdef CONFIG_ZJ_DEBUG
 void __zj_debug(int level, const char *file, const char *func,
 		  unsigned int line, const char *fmt, ...)
@@ -423,7 +426,6 @@ int zj_journal_write_metadata_buffer(ztransaction_t *transaction,
 	new_bh = alloc_buffer_head(GFP_NOFS|__GFP_NOFAIL);
 
 	/* keep subsequent assertions sane */
-	/*atomic_set(&new_bh->b_count, 1);*/
 	cold_data = zj_alloc(bh_in->b_size, GFP_NOFS | __GFP_NOFAIL);
 	cold_jh = journal_alloc_zjournal_head();
 
@@ -477,8 +479,9 @@ repeat:
 		// commit 시 write metadata 직전에 버퍼의 카운트를 하나 늘려주는데,
 		// 여기서는 write를 직접 내릴 대상이 orig에서 copy본으로 바꼈으므로
 		// count 관리가 필요하다.
-		atomic_dec(&bh_in->b_count);
-		atomic_inc(&new_bh->b_count);
+		/*atomic_dec(&bh_in->b_count);*/
+		atomic_set(&new_bh->b_count, 1);
+		/*atomic_inc(&new_bh->b_count);*/
 
 		/*printk(KERN_ERR "wr jh_in: %d/%d, in's orig: %d/%d, curr: %d/%d\n", jh_in->b_transaction->t_journal->j_core_id, jh_in->b_transaction->t_tid, jh_in->b_orig->b_transaction->t_journal->j_core_id, jh_in->b_orig->b_transaction->t_tid, transaction->t_journal->j_core_id, transaction->t_tid);*/
 		if (cold_jh->b_cpcount)
@@ -492,12 +495,14 @@ repeat:
 	// commit 시 write metadata 직전에 버퍼의 카운트를 하나 늘려주는데,
 	// 여기서는 write를 직접 내릴 대상이 orig에서 copy본으로 바꼈으므로
 	// count 관리가 필요하다.
-	atomic_dec(&bh_in->b_count);
-	atomic_inc(&new_bh->b_count);
+	/*atomic_dec(&bh_in->b_count);*/
+	atomic_set(&new_bh->b_count, 1);
+	/*atomic_inc(&new_bh->b_count);*/
 	jh_in->b_cpcount++;
 	jh_in->b_transaction = NULL;
 	jh_in->b_jlist = BJ_None;
-	/*jh_in->b_jcount--;*/
+	/*printk(KERN_ERR "4 start put %p\n", jh_in);*/
+	zj_journal_put_zjournal_head(jh_in);
 	if (cold_jh->b_cpcount)
 		printk(KERN_ERR "1.5 cold cp count %d\n",jh_in->b_cpcount, cold_jh->b_cpcount);
 
@@ -586,6 +591,8 @@ journal_block:
 	set_buffer_mapped(new_bh);
 
 	*bh_out = new_bh;
+	if (!buffer_shadow(new_bh) || !buffer_frozen(new_bh))
+		panic("ghi");
 	jbd_unlock_bh_state(bh_in);
 	jbd_lock_bh_state(new_bh);
 
@@ -1189,28 +1196,27 @@ static int zj_seq_info_show(struct seq_file *seq, void *v)
 		   s->journal->j_max_transaction_buffers);
 	if (s->stats->ts_tid == 0)
 		return 0;
-	seq_printf(seq, "average: \n  %ums waiting for transaction\n",
-	    jiffies_to_msecs(s->stats->run.rs_wait / s->stats->ts_tid));
-	seq_printf(seq, "  %ums request delay\n",
+	seq_printf(seq, "average: \n  %u ms waiting for transaction\n",
+	    jiffies_to_msecs(s->stats->run.rs_wait ));
+	seq_printf(seq, "  %u ms request delay\n",
 	    (s->stats->ts_requested == 0) ? 0 :
-	    jiffies_to_msecs(s->stats->run.rs_request_delay /
-			     s->stats->ts_requested));
-	seq_printf(seq, "  %ums running transaction\n",
-	    jiffies_to_msecs(s->stats->run.rs_running / s->stats->ts_tid));
-	seq_printf(seq, "  %ums transaction was being locked\n",
-	    jiffies_to_msecs(s->stats->run.rs_locked / s->stats->ts_tid));
-	seq_printf(seq, "  %ums flushing data (in ordered mode)\n",
-	    jiffies_to_msecs(s->stats->run.rs_flushing / s->stats->ts_tid));
-	seq_printf(seq, "  %ums logging transaction\n",
-	    jiffies_to_msecs(s->stats->run.rs_logging / s->stats->ts_tid));
-	seq_printf(seq, "  %lluus average transaction commit time\n",
-		   div_u64(s->journal->j_average_commit_time, 1000));
+	    jiffies_to_msecs(s->stats->run.rs_request_delay));
+	seq_printf(seq, "  %u ms running transaction\n",
+	    jiffies_to_msecs(s->stats->run.rs_running ));
+	seq_printf(seq, "  %u ms transaction was being locked\n",
+	    jiffies_to_msecs(s->stats->run.rs_locked ));
+	seq_printf(seq, "  %u ms flushing data (in ordered mode)\n",
+	    jiffies_to_msecs(s->stats->run.rs_flushing ));
+	seq_printf(seq, "  %u ms logging transaction\n",
+	    jiffies_to_msecs(s->stats->run.rs_logging ));
+	seq_printf(seq, "  %llu us average transaction commit time\n",
+		   s->journal->j_average_commit_time);
 	seq_printf(seq, "  %lu handles per transaction\n",
-	    s->stats->run.rs_handle_count / s->stats->ts_tid);
+	    s->stats->run.rs_handle_count );
 	seq_printf(seq, "  %lu blocks per transaction\n",
-	    s->stats->run.rs_blocks / s->stats->ts_tid);
+	    s->stats->run.rs_blocks);
 	seq_printf(seq, "  %lu logged blocks per transaction\n",
-	    s->stats->run.rs_blocks_logged / s->stats->ts_tid);
+	    s->stats->run.rs_blocks_logged );
 	return 0;
 }
 
@@ -1393,6 +1399,24 @@ static zjournal_t *journal_init_common(struct block_device *bdev,
 	journal->j_min_batch_time = 0;
 	journal->j_max_batch_time = 15000; /* 15ms */
 	atomic_set(&journal->j_reserved_credits, 0);
+	tunmap1 = 0;
+	tunmap2 = 0;
+	tunmap3 = 0;
+	tunmap4 = 0;
+	tunmap5 = 0;
+	tunmap6 = 0;
+	tunmap7 = 0;
+	tunmap8 = 0;
+	tunmap_total = 0;
+	tforget1 = 0;
+	tforget2 = 0;
+	tforget3 = 0;
+	tforget4 = 0;
+	tforget5 = 0;
+	tforget6 = 0;
+	tforget7 = 0;
+	tforget8 = 0;
+	tforget_total = 0;
 
 	/* The journal is marked for error until we succeed with recovery! */
 	journal->j_flags = ZJ_ABORT;
@@ -2025,6 +2049,9 @@ recovery_error:
 int zj_journal_destroy(zjournal_t *journal)
 {
 	int err = 0;
+	printk(KERN_ERR "dest %d\n", journal->j_core_id);
+	printk(KERN_ERR "tunmap %d: %d, %d, %d, %d, %d, %d, %d, %d\n", tunmap_total, tunmap1, tunmap2, tunmap3, tunmap4, tunmap5, tunmap6, tunmap7, tunmap8);
+	printk(KERN_ERR "tforget %d: %d, %d, %d, %d, %d, %d, %d, %d\n", tforget_total, tforget1, tforget2, tforget3, tforget4, tforget5, tforget6, tforget7, tforget8);
 
 	/* Wait for the commit thread to wake up and die. */
 	journal_kill_thread(journal);
@@ -2847,11 +2874,22 @@ static void __journal_remove_zjournal_head(struct buffer_head *bh)
 {
 	struct zjournal_head *jh = bh2jh(bh);
 
+	/*printk(KERN_ERR "ppp\n");*/
 	J_ASSERT_JH(jh, jh->b_jcount >= 0);
+	if (jh->b_transaction) {
+		printk(KERN_ERR "remove %p, bug tx: %d, cpcount: %d\n", jh, jh->b_transaction->t_state, jh->b_cpcount);
+		panic("abc");
+	}
 	J_ASSERT_JH(jh, jh->b_transaction == NULL);
 	J_ASSERT_JH(jh, jh->b_next_transaction == NULL);
 	J_ASSERT_JH(jh, jh->b_cp_transaction == NULL);
 	J_ASSERT_JH(jh, jh->b_jlist == BJ_None);
+	if (jh->b_orig) {
+		printk(KERN_ERR "remove %p, bug orig list: %d, cpcount: %d\n", jh, jh->b_orig->b_jlist, jh->b_cpcount);
+		panic("abc");
+	}
+	J_ASSERT_JH(jh, jh->b_orig == NULL);
+	J_ASSERT_JH(jh, jh->b_cpcount == 0);
 	J_ASSERT_BH(bh, buffer_jbd(bh));
 	J_ASSERT_BH(bh, jh2bh(jh) == bh);
 	BUFFER_TRACE(bh, "remove zjournal_head");
@@ -2880,6 +2918,7 @@ void zj_journal_put_zjournal_head(struct zjournal_head *jh)
 	jbd_lock_bh_zjournal_head(bh);
 	J_ASSERT_JH(jh, jh->b_jcount > 0);
 	--jh->b_jcount;
+	/*printk(KERN_ERR "put %p, num: %d\n", jh, jh->b_jcount);*/
 	if (!jh->b_jcount) {
 		__journal_remove_zjournal_head(bh);
 		jbd_unlock_bh_zjournal_head(bh);

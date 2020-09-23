@@ -34,6 +34,8 @@
 #endif
 
 #define journal_oom_retry 1
+extern int tunmap1, tunmap2, tunmap3, tunmap4, tunmap5, tunmap6;
+extern int tforget_total, tforget1, tforget2, tforget3, tforget4, tforget5, tforget6;
 
 /*
  * Define JBD2_PARANIOD_IOFAIL to cause a kernel BUG() if ext4 finds
