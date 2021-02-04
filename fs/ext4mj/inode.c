@@ -5269,7 +5269,6 @@ static void ext4mj_wait_for_tail_page_commit(struct inode *inode)
 {
 	struct page *page;
 	unsigned offset;
-	zjournal_t *journal = EXT4MJ_SB(inode->i_sb)->s_journal;
 	tid_t commit_tid = 0;
 	int ret;
 

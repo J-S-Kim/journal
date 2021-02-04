@@ -32,6 +32,7 @@
 #include <linux/bit_spinlock.h>
 #include <crypto/hash.h>
 #include <linux/percpu.h>
+#include <linux/radix-tree.h>
 #endif
 
 //#define ZJ_PROFILE
@@ -71,9 +72,6 @@ void __zj_debug(int level, const char *file, const char *func,
 
 extern void *zj_alloc(size_t size, gfp_t flags);
 extern void zj_free(void *ptr, size_t size);
-
-extern int tunmap_total, tunmap1, tunmap2, tunmap3, tunmap4, tunmap5, tunmap6, tunmap7, tunmap8;
-extern int tforget_total, tforget1, tforget2, tforget3, tforget4, tforget5, tforget6, tforget7, tforget8;
 
 #define ZJ_MIN_JOURNAL_BLOCKS 1024
 
@@ -433,6 +431,7 @@ static inline void jbd_unlock_bh_zjournal_head(struct buffer_head *bh)
 #define __JI_COMMIT_RUNNING 0
 #define __JI_WRITE_DATA 1
 #define __JI_WAIT_DATA 2
+#define __JI_TEMP_LIST 3
 
 /*
  * Commit of the inode data in progress. We use this flag to protect us from
@@ -444,6 +443,7 @@ static inline void jbd_unlock_bh_zjournal_head(struct buffer_head *bh)
 #define JI_WRITE_DATA (1 << __JI_WRITE_DATA)
 /* Wait for outstanding data writes for this inode before commit */
 #define JI_WAIT_DATA (1 << __JI_WAIT_DATA)
+#define JI_TEMP_LIST (1 << __JI_TEMP_LIST)
 
 /**
  * struct jbd_inode - The jbd_inode type is the structure linking inodes in
@@ -869,6 +869,7 @@ struct zjournal_s
 	 * checkpointing. [j_list_lock]
 	 */
 	ztransaction_t		*j_checkpoint_transactions;
+    struct radix_tree_root j_checkpoint_txtree;
 
 	/**
 	 * @j_wait_transaction_locked:

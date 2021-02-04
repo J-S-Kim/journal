@@ -374,7 +374,7 @@ static void ext4mj_journal_commit_callback(zjournal_t *journal, ztransaction_t *
 
 	BUG_ON(txn->t_state == T_FINISHED);
 
-	ext4mj_process_freed_data(sb, txn->t_tid);
+	/*ext4mj_process_freed_data(sb, txn->t_tid);*/
 
 	spin_lock(&sbi->s_md_lock);
 	while (!list_empty(&txn->t_private_list)) {
@@ -4052,7 +4052,6 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 	sbi->_s_journal = kvzalloc(EXT4MJ_NUM_JOURNALS *
 					  sizeof(struct zjournal_s *),
 					  GFP_KERNEL);
-	printk(KERN_ERR "zjournal size: %u\n", sizeof(struct zjournal_s));
 	if (sbi->_s_journal == NULL) {
 		ext4mj_msg(sb, KERN_ERR, "not enough memory");
 		ret = -ENOMEM;
@@ -4637,7 +4636,7 @@ static zjournal_t *ext4mj_get_journal(struct super_block *sb,
 		return NULL;
 	}
 	journal->j_private = sb;
-	journal->j_private_start = EXT4MJ_SB(sb)->_s_journal;
+	journal->j_private_start = (void **)EXT4MJ_SB(sb)->_s_journal;
 	ext4mj_init_journal_params(sb, journal);
 	return journal;
 }
@@ -4714,7 +4713,7 @@ static zjournal_t *ext4mj_get_dev_journal(struct super_block *sb,
 		goto out_bdev;
 	}
 	journal->j_private = sb;
-	journal->j_private_start = EXT4MJ_SB(sb)->_s_journal;
+	journal->j_private_start = (void **)EXT4MJ_SB(sb)->_s_journal;
 	ll_rw_block(REQ_OP_READ, REQ_META | REQ_PRIO, 1, &journal->j_sb_buffer);
 	wait_on_buffer(journal->j_sb_buffer);
 	if (!buffer_uptodate(journal->j_sb_buffer)) {
@@ -4744,8 +4743,6 @@ static int ext4mj_load_journals_left(struct super_block *sb,
 			     zjournal_t *journal, int core_id)
 {
 	int err = 0;
-	int num_cpu = num_online_cpus();
-	int core;
 
 	if (!(journal->j_flags & ZJ_BARRIER))
 		ext4mj_msg(sb, KERN_INFO, "barriers disabled");
@@ -4757,16 +4754,7 @@ static int ext4mj_load_journals_left(struct super_block *sb,
 		if(save)
 			memcpy(save, ((char *) es) +
 					EXT4MJ_S_ERR_START, EXT4MJ_S_ERR_LEN);
-		/*if (num_cpu <= 20)*/
-			/*core = 2;*/
-		/*else if (num_cpu <= 40)*/
-			/*core = 4;*/
-		/*else if (num_cpu <= 60)*/
-			/*core = 6;*/
-		/*else if (num_cpu <= 80)*/
-			/*core = 8;*/
-		/*core = num_cpu/core;*/
-		err = zj_journal_load(journal, core_id*5);
+		err = zj_journal_load(journal, core_id);
 		if(save)
 			memcpy(((char *) es) + EXT4MJ_S_ERR_START,
 					save, EXT4MJ_S_ERR_LEN);

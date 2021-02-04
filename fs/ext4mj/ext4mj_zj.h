@@ -493,7 +493,7 @@ static inline int ext4mj_should_dioread_nolock(struct inode *inode)
 
 //Jongseok: 나중에 중앙 저널을 어떻게 접근하는지 방법을 정해서 구현해야 한다.
 //지금은 그냥 부르는 코어의 저널에 접근하도록만 되어있다. 
-static zjournal_t* ext4mj_get_zjournal_sbi(struct ext4mj_sb_info *sbi, int j_num)
+static inline zjournal_t* ext4mj_get_zjournal_sbi(struct ext4mj_sb_info *sbi, int j_num)
 {
     //int num_cpu, core;
 	if (sbi->s_num_journals == 0)
@@ -512,7 +512,7 @@ static zjournal_t* ext4mj_get_zjournal_sbi(struct ext4mj_sb_info *sbi, int j_num
     //core = num_cpu / core;
 
     //printk(KERN_ERR "num_cpu: %d, core: %d, j_num: %d\n", num_cpu, core, j_num);
-	return sbi->_s_journal[j_num/5];
+	return sbi->_s_journal[j_num];
 }
 
 #endif	/* _EXT4MJ_ZJ_H */
