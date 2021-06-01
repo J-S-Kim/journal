@@ -40,7 +40,7 @@
 #include "xattr.h"
 #include "acl.h"
 
-#include "ext4mj_trace.h"
+#include <trace/events/ext4mj.h>
 /*
  * define how far ahead to read directories while searching them.
  */

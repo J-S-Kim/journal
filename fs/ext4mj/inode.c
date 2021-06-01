@@ -45,7 +45,7 @@
 #include "acl.h"
 #include "truncate.h"
 
-#include "ext4mj_trace.h"
+#include <trace/events/ext4mj.h>
 
 #define MPAGE_DA_EXTENT_TAIL 0x01
 

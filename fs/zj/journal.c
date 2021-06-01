@@ -46,7 +46,7 @@
 #include <linux/sched/mm.h>
 
 #define CREATE_TRACE_POINTS
-#include "zj_trace.h"
+#include <trace/events/zj.h>
 
 #include <linux/uaccess.h>
 #include <asm/page.h>

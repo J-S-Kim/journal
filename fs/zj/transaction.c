@@ -31,7 +31,7 @@
 #include <linux/module.h>
 #include <linux/sched/mm.h>
 
-#include "zj_trace.h"
+#include <trace/events/zj.h>
 
 static void __zj_zjournal_temp_unlink_buffer(struct zjournal_head *jh);
 static void __zj_journal_unfile_buffer(struct zjournal_head *jh);

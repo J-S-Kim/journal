@@ -4,7 +4,7 @@
 #if !defined(_TRACE_ZJ_H) || defined(TRACE_HEADER_MULTI_READ)
 #define _TRACE_ZJ_H
 
-#include "zj.h"
+#include "../../../fs/zj/zj.h"
 #include <linux/tracepoint.h>
 
 struct transaction_chp_stats_s;
@@ -383,7 +383,4 @@ TRACE_EVENT(zj_lock_buffer_stall,
 
 /* This part must be outside protection */
 /* cassiano:: added to fix the trace problem */
-#undef TRACE_INCLUDE_PATH
-#define TRACE_INCLUDE_PATH .
-#define TRACE_INCLUDE_FILE zj_trace
 #include <trace/define_trace.h>

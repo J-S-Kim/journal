@@ -23,7 +23,7 @@
 #include "mballoc.h"
 #include <linux/sort.h>
 #include <linux/list_sort.h>
-#include "ext4mj_trace.h"
+#include <trace/events/ext4mj.h>
 
 /* Convert an ext4mj_fsmap to an fsmap. */
 void ext4mj_fsmap_from_internal(struct super_block *sb, struct fsmap *dest,

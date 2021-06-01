@@ -27,7 +27,7 @@
 #include <linux/bio.h>
 #include <linux/blkdev.h>
 #include <linux/bitops.h>
-#include "zj_trace.h"
+#include <trace/events/zj.h>
 
 /*
  * IO end handler for temporary buffer_heads handling writes to the journal.

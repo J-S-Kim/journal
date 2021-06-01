@@ -53,7 +53,7 @@
 #include "fsmap.h"
 
 #define CREATE_TRACE_POINTS
-#include "ext4mj_trace.h"
+#include <trace/events/ext4mj.h>
 
 static struct ext4mj_lazy_init *ext4mj_li_info;
 static struct mutex ext4mj_li_mtx;

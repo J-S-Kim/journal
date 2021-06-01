@@ -28,7 +28,7 @@
 #include <linux/slab.h>
 #include <linux/nospec.h>
 #include <linux/backing-dev.h>
-#include "ext4mj_trace.h"
+#include <trace/events/ext4mj.h>
 
 #ifdef CONFIG_EXT4MJ_DEBUG
 ushort ext4mj_mballoc_debug __read_mostly;

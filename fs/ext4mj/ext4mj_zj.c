@@ -4,8 +4,8 @@
  */
 
 #include "ext4mj_zj.h"
+#include <trace/events/ext4mj.h>
 
-#include "ext4mj_trace.h"
 
 /* Just increment the non-pointer handle value */
 static handle_t *ext4mj_get_nojournal(void)

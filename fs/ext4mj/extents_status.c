@@ -15,7 +15,7 @@
 #include <linux/seq_file.h>
 #include "ext4mj.h"
 
-#include "ext4mj_trace.h"
+#include <trace/events/ext4mj.h>
 
 /*
  * According to previous discussion in Ext4 Developer Workshop, we

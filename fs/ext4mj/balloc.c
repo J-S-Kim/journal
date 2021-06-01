@@ -21,7 +21,7 @@
 #include "ext4mj_zj.h"
 #include "mballoc.h"
 
-#include "ext4mj_trace.h"
+#include <trace/events/ext4mj.h>
 
 static unsigned ext4mj_num_base_meta_clusters(struct super_block *sb,
 					    ext4mj_group_t block_group);

@@ -2588,7 +2588,4 @@ DEFINE_GETFSMAP_EVENT(ext4mj_getfsmap_mapping);
 
 /* This part must be outside protection */
 /* cassiano:: added to fix the trace problem */
-#undef TRACE_INCLUDE_PATH
-#define TRACE_INCLUDE_PATH .
-#define TRACE_INCLUDE_FILE ext4mj_trace
 #include <trace/define_trace.h>

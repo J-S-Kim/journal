@@ -32,7 +32,7 @@
 #include "ext4mj.h"
 #include "ext4mj_zj.h"
 
-#include "ext4mj_trace.h"
+#include <trace/events/ext4mj.h>
 
 /*
  * If we're not journaling and this is a just-created file, we have to

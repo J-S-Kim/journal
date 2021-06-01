@@ -22,7 +22,7 @@
 #include "ext4mj.h"
 #include <linux/fsmap.h>
 #include "fsmap.h"
-#include "ext4mj_trace.h"
+#include <trace/events/ext4mj.h>
 
 /**
  * Swap memory between @a and @b for @len bytes.

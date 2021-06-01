@@ -23,8 +23,8 @@
 #include <linux/errno.h>
 #include <linux/slab.h>
 #include <linux/blkdev.h>
-#include "zj_trace.h"
 
+#include <trace/events/zj.h>
 /*
  * Unlink a buffer from a transaction checkpoint list.
  *
