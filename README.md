@@ -35,7 +35,7 @@ File systems  --->
 
 ```
 sudo ./e2fsprog-zj/misc/mke2fs -t ext4 -J multi_journal -F -G 1 /dev/<block device>
-sudo tune2fs -o journal_data /dev/<block device>
+sudo ./e2fsprog-zj/misc/tune2fs -o journal_data /dev/<block device>
 sudo mount -t ext4mj /dev/<block device> <mount point>
 ```
 
