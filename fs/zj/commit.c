@@ -163,6 +163,7 @@ static int journal_submit_commit_record(zjournal_t *journal,
 
 	tagp = &bh->b_data[sizeof(struct commit_header)];
 
+	spin_lock(&commit_transaction->t_mark_lock);
 	for_each_possible_cpu(cpu) {
 		struct list_head *rc = &commit_transaction->t_commit_list[cpu];
 		commit_entry_t *tc;
@@ -174,6 +175,7 @@ static int journal_submit_commit_record(zjournal_t *journal,
 			tagp += tag_bytes;
 		}
 	}
+	spin_unlock(&commit_transaction->t_mark_lock);
 	tag = (commit_block_tag_t *) tagp;
 	tag->core = cpu_to_be16(0 & (u16)~0);
 	tag->tid = cpu_to_be32(0 & (u32)~0);
@@ -446,6 +448,7 @@ void zj_journal_commit_transaction(zjournal_t *journal)
 	int csum_size = 0;
 	LIST_HEAD(io_bufs);
 	LIST_HEAD(log_bufs);
+	int io_bufs_num = 0;
 
 	if (zj_journal_has_csum_v2or3(journal))
 		csum_size = sizeof(struct zj_journal_block_tail);
@@ -593,6 +596,25 @@ void zj_journal_commit_transaction(zjournal_t *journal)
 	journal->j_running_transaction = NULL;
 	start_time = ktime_get();
 	commit_transaction->t_log_start = journal->j_head;
+
+	// one more after T_FLUSH
+	spin_lock(&commit_transaction->t_handle_lock);
+	while (atomic_read(&commit_transaction->t_updates)) {
+		DEFINE_WAIT(wait);
+
+		prepare_to_wait(&journal->j_wait_updates, &wait,
+					TASK_UNINTERRUPTIBLE);
+		if (atomic_read(&commit_transaction->t_updates)) {
+			spin_unlock(&commit_transaction->t_handle_lock);
+			write_unlock(&journal->j_state_lock);
+			schedule();
+			write_lock(&journal->j_state_lock);
+			spin_lock(&commit_transaction->t_handle_lock);
+		}
+		finish_wait(&journal->j_wait_updates, &wait);
+	}
+	spin_unlock(&commit_transaction->t_handle_lock);
+
 	wake_up(&journal->j_wait_transaction_locked);
 	write_unlock(&journal->j_state_lock);
 
@@ -738,11 +760,16 @@ repeat_meta:
 			jh = commit_transaction->t_buffers;
 
 			if (!jh) 
-				continue;
+				goto check_journal_io;
 			goto repeat_meta;
 		}
 
 		zj_file_log_bh(&io_bufs, wbuf[bufs]);
+		io_bufs_num++;
+
+		if (io_bufs_num != commit_transaction->t_nr_shadows) {
+			printk(KERN_ERR "%d, %d\n", io_bufs_num, commit_transaction->t_nr_shadows);
+		}
 
 		/* Record the new block's tag in the current descriptor
                    buffer */
@@ -773,12 +800,15 @@ repeat_meta:
 
 		/* If there's no more to do, or if the descriptor is full,
 		   let the IO rip! */
-
+check_journal_io:
 		if (bufs == journal->j_wbufsize ||
 		    commit_transaction->t_buffers == NULL ||
 		    space_left < tag_bytes + 16 + csum_size) {
 
 			jbd_debug(4, "ZJ: Submit %d IOs\n", bufs);
+
+			if (bufs == 0)
+				continue;
 
 			/* Write an end-of-descriptor marker before
                            submitting the IOs.  "tag" still points to
@@ -894,6 +924,7 @@ start_journal_io:
 		if (unlikely(!buffer_uptodate(bh)))
 			err = -EIO;
 		zj_unfile_log_bh(bh);
+		io_bufs_num--;
 
 		/*
 		 * The list contains temporary buffer heads created by
@@ -902,6 +933,12 @@ start_journal_io:
 		__brelse(bh);
 
 		/* We also have to refile the corresponding shadowed buffer */
+		if (!commit_transaction->t_shadow_list) {
+			printk(KERN_ERR "%d, %d\n", io_bufs_num, commit_transaction->t_nr_shadows);
+			printk(KERN_ERR "shadow list error (%d, %d) bh: %p, jh: %p, jh's orig: %p, jh's TX: %p(state: %d)\n", 
+			journal->j_core_id, commit_transaction->t_tid, bh, bh2jh(bh), bh2jh(bh)->b_orig, bh2jh(bh)->b_transaction, bh2jh(bh)->b_transaction->t_state);
+			panic("shadow");
+		}
 		jh = commit_transaction->t_shadow_list->b_tprev;
 		bh = jh2bh(jh);
 
@@ -970,7 +1007,7 @@ start_journal_io:
 		while (!list_empty(rc)) {
 			commit_entry_t *tc = list_entry(rc->next, commit_entry_t, pos);
 
-			list_del(&tc->pos);
+			list_del_init(&tc->pos);
 			if (zj_check_mark_in_list(&commit_transaction->t_check_mark_list, tc)) {
 				zj_free_commit(tc);
 				continue;
@@ -982,10 +1019,6 @@ start_journal_io:
 	}
 	if (commit_transaction->t_check_num_max < commit_transaction->t_check_num)
 		commit_transaction->t_check_num_max = commit_transaction->t_check_num;
-
-	if (list_empty(&commit_transaction->t_check_mark_list)) {
-		commit_transaction->t_real_commit = 1;
-	}
 
 	spin_unlock(&commit_transaction->t_mark_lock);
 
@@ -1130,7 +1163,7 @@ restart_loop:
 			 * 따라서 두 가지 케이스를 모두 고려하며 코드를 수정해야함
 			 */
 			orig_jh->b_modified = 0;
-			clear_buffer_freed(orig_bh);
+			//clear_buffer_freed(orig_bh);
 			if (!orig_jh->b_next_transaction) {
 				clear_buffer_freed(orig_bh);
 				clear_buffer_jbddirty(orig_bh);
@@ -1199,10 +1232,11 @@ restart_loop:
 			if (!orig_jh->b_cpcount) {
 				if (!buffer_jbddirty(orig_bh)) {
 					try_to_free = 1;
-				} else if (orig_jh->b_transaction == NULL && !orig_jh->b_cpcount && 
-						test_clear_buffer_jbddirty(orig_bh)) {
-					mark_buffer_dirty(orig_bh);	/* Expose it to the VM */
-				}
+				} 
+				//else if (orig_jh->b_transaction == NULL && !orig_jh->b_cpcount && 
+				//		test_clear_buffer_jbddirty(orig_bh)) {
+				//	mark_buffer_dirty(orig_bh);	/* Expose it to the VM */
+				//}
 			}
 			zj_journal_put_zjournal_head(orig_jh);
 		}
@@ -1257,19 +1291,19 @@ restart_loop:
 		commit_transaction->t_tid, commit_transaction);
 
 
-	if (commit_transaction->t_checkpoint_list == NULL &&
-		commit_transaction->t_checkpoint_io_list == NULL) {
-		commit_transaction->t_real_commit = 1;
-		spin_lock(&commit_transaction->t_mark_lock);
-		while(!list_empty(&commit_transaction->t_check_mark_list)) {
-			commit_entry_t *tc = list_entry(commit_transaction->t_check_mark_list.next, 
-							commit_entry_t, pos);
-			list_del(&tc->pos);
-			zj_free_commit(tc);
-			commit_transaction->t_check_num--;
-		}
-		spin_unlock(&commit_transaction->t_mark_lock);
-	}
+	//if (commit_transaction->t_checkpoint_list == NULL &&
+	//	commit_transaction->t_checkpoint_io_list == NULL) {
+	//	commit_transaction->t_real_commit = 1;
+	//	spin_lock(&commit_transaction->t_mark_lock);
+	//	while(!list_empty(&commit_transaction->t_check_mark_list)) {
+	//		commit_entry_t *tc = list_entry(commit_transaction->t_check_mark_list.next, 
+	//						commit_entry_t, pos);
+	//		list_del(&tc->pos);
+	//		zj_free_commit(tc);
+	//		commit_transaction->t_check_num--;
+	//	}
+	//	spin_unlock(&commit_transaction->t_mark_lock);
+	//}
 	spin_unlock(&journal->j_list_lock);
 
 	/* Done with this transaction! */
@@ -1320,6 +1354,13 @@ restart_loop:
 	write_lock(&journal->j_state_lock);
 	spin_lock(&journal->j_list_lock);
 	commit_transaction->t_state = T_FINISHED;
+
+	spin_lock(&commit_transaction->t_mark_lock);
+	if (list_empty(&commit_transaction->t_check_mark_list)) {
+		commit_transaction->t_real_commit = 1;
+	}
+	spin_unlock(&commit_transaction->t_mark_lock);
+
 	/* Check if the transaction can be dropped now that we are finished */
 	if (commit_transaction->t_checkpoint_list == NULL &&
 	    commit_transaction->t_checkpoint_io_list == NULL) {

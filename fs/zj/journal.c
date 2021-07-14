@@ -112,6 +112,9 @@ EXPORT_SYMBOL(zj_commit_cache);
 static void __journal_abort_soft (zjournal_t *journal, int errno);
 static int zj_journal_create_slab(size_t slab_size);
 
+int tunmap1, tunmap2, tunmap3, tunmap4, tunmap5, tunmap6, tunmap7, tunmap8, tunmap9;
+int tforget_total, tforget1, tforget2, tforget3, tforget4, tforget5, tforget6;
+
 #ifdef CONFIG_ZJ_DEBUG
 void __zj_debug(int level, const char *file, const char *func,
 		  unsigned int line, const char *fmt, ...)
@@ -1353,6 +1356,24 @@ static zjournal_t *journal_init_common(struct block_device *bdev,
 	journal->j_max_batch_time = 15000; /* 15ms */
 	atomic_set(&journal->j_reserved_credits, 0);
 
+	tunmap1 = 0;
+	tunmap2 = 0;
+	tunmap3 = 0;
+	tunmap4 = 0;
+	tunmap5 = 0;
+	tunmap6 = 0;
+	tunmap7 = 0;
+	tunmap8 = 0;
+	tunmap9 = 0;
+
+	tforget_total = 0;
+	tforget1 = 0;
+	tforget2 = 0;
+	tforget3 = 0;
+	tforget4 = 0;
+	tforget5 = 0;
+	tforget6 = 0;
+
 	/* The journal is marked for error until we succeed with recovery! */
 	journal->j_flags = ZJ_ABORT;
 
@@ -1838,10 +1859,10 @@ ztransaction_t *zj_get_target_transaction(zjournal_t *journal, int core, tid_t t
 
 	read_lock(&target_journal->j_state_lock);
 	spin_lock(&target_journal->j_list_lock);
-	target_transaction = 
-		target_journal->j_checkpoint_transactions;
+	/*target_transaction = */
+		/*target_journal->j_checkpoint_transactions;*/
 
-	if (!target_transaction) {
+	/*if (!target_transaction) {*/
 		if (((target_transaction = 
 	               target_journal->j_committing_transaction) != NULL) &&
 		      target_transaction->t_tid == tid)
@@ -1852,7 +1873,7 @@ ztransaction_t *zj_get_target_transaction(zjournal_t *journal, int core, tid_t t
 		      target_transaction->t_tid == tid) 
 			goto out;
 
-	} else {
+	/*} else {*/
 		// tid가 가장 오래된 cp TX보다도 작다는 것은 해당 tid가 이미
 		// real commit되고 checkpointing되어 사라졌다는 것
 
@@ -1861,7 +1882,7 @@ ztransaction_t *zj_get_target_transaction(zjournal_t *journal, int core, tid_t t
 		if (!target_transaction)
 			goto out;
 
-	}
+	/*}*/
 
 	target_transaction = NULL;
 out:
@@ -2026,6 +2047,9 @@ int zj_journal_destroy(zjournal_t *journal)
 			err = -EIO;
 		brelse(journal->j_sb_buffer);
 	}
+
+	printk(KERN_ERR "tunmap: %d, %d, %d, %d, %d, %d, %d, %d, %d\n", tunmap1, tunmap2, tunmap3, tunmap4, tunmap5, tunmap6, tunmap7, tunmap8, tunmap9);
+	printk(KERN_ERR "tforget: %d, %d, %d, %d, %d, %d, %d\n", tforget_total, tforget1, tforget2, tforget3, tforget4, tforget5, tforget6);
 
 	if (journal->j_proc_entry)
 		zj_stats_proc_exit(journal);
@@ -2692,7 +2716,7 @@ void journal_free_zjournal_head(struct zjournal_head *jh)
 {
 #ifdef CONFIG_ZJ_DEBUG
 	atomic_dec(&nr_zjournal_heads);
-	memset(jh, ZJ_POISON_FREE, sizeof(*jh));
+	//memset(jh, ZJ_POISON_FREE, sizeof(*jh));
 #endif
 	kmem_cache_free(zj_zjournal_head_cache, jh);
 }
@@ -2801,6 +2825,9 @@ static void __journal_remove_zjournal_head(struct buffer_head *bh)
 	J_ASSERT_JH(jh, jh->b_next_transaction == NULL);
 	J_ASSERT_JH(jh, jh->b_cp_transaction == NULL);
 	J_ASSERT_JH(jh, jh->b_jlist == BJ_None);
+	if (jh->b_orig) {
+		panic("EXIST jh's b_orig");
+	}
 	J_ASSERT_JH(jh, jh->b_orig == NULL);
 	J_ASSERT_JH(jh, jh->b_cpcount == 0);
 	J_ASSERT_BH(bh, buffer_jbd(bh));
@@ -2940,7 +2967,7 @@ static int __init zj_journal_init_handle_cache(void)
 		kmem_cache_destroy(zj_handle_cache);
 		return -ENOMEM;
 	}
-	zj_commit_cache = KMEM_CACHE(commit_entry_s, 0);
+	zj_commit_cache = KMEM_CACHE(commit_entry_s, SLAB_TEMPORARY);
 	if (zj_commit_cache == NULL) {
 		printk(KERN_EMERG "ZJ: failed to create commit cache\n");
 		kmem_cache_destroy(zj_handle_cache);

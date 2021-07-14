@@ -136,7 +136,7 @@ repeat_search:
 						mark_core, mark_tid) ||
 			zj_check_mark_value_in_list(&transaction->t_check_mark_list, 
 					mark_core, mark_tid)) {
-			list_del(&tc->pos);
+			list_del_init(&tc->pos);
 			zj_free_commit(tc);
 			check_num--;
 		}
@@ -163,24 +163,37 @@ static int __zj_cp_real_commit(ztransaction_t *transaction, int force)
 	commit_mark_t *buf;
 	commit_entry_t *cur_mark = NULL;
 
-	spin_lock(&journal->j_list_lock);
-	if (transaction->t_checkpoint_list == NULL &&
-		transaction->t_checkpoint_io_list == NULL)
-	{
-		spin_lock(&transaction->t_mark_lock);
-		while(!list_empty(&transaction->t_check_mark_list)) {
-			commit_entry_t *tc = list_entry(transaction->t_check_mark_list.next, 
-							commit_entry_t, pos);
-			list_del(&tc->pos);
-			zj_free_commit(tc);
-			transaction->t_check_num--;
-		}
-		transaction->t_real_commit = 1;
-		spin_unlock(&transaction->t_mark_lock);
-		spin_unlock(&journal->j_list_lock);
-		return 0;
+	read_lock(&journal->j_state_lock);
+	if (transaction->t_state < T_FINISHED) {
+		read_unlock(&journal->j_state_lock);
+		if (!force) 
+			return 1;
+
+		wait_event(journal->j_wait_done_commit,
+				!tid_gt(transaction->t_tid, journal->j_commit_sequence));
+		read_lock(&journal->j_state_lock);
 	}
-	spin_unlock(&journal->j_list_lock);
+	read_unlock(&journal->j_state_lock);
+
+	//spin_lock(&journal->j_list_lock);
+	//if (transaction->t_checkpoint_list == NULL &&
+	//	transaction->t_checkpoint_io_list == NULL)
+	//{
+	//	spin_lock(&transaction->t_mark_lock);
+	//	while(!list_empty(&transaction->t_check_mark_list)) {
+	//		commit_entry_t *tc = list_entry(transaction->t_check_mark_list.next, 
+	//						commit_entry_t, pos);
+	//		list_del(&tc->pos);
+	//		zj_free_commit(tc);
+	//		transaction->t_check_num--;
+	//	}
+	//	transaction->t_real_commit = 1;
+	//	spin_unlock(&transaction->t_mark_lock);
+	//	spin_unlock(&journal->j_list_lock);
+	//	printk(KERN_ERR "%d, 1: %d\n", transaction->t_tid, transaction->t_check_num);
+	//	return 0;
+	//}
+	//spin_unlock(&journal->j_list_lock);
 	buf = kmalloc_array(ZJ_NR_COMMIT, sizeof(commit_mark_t),
 					GFP_KERNEL);
 
@@ -196,6 +209,7 @@ retry_mark:
 			if (unlikely(ZERO_OR_NULL_PTR(transaction))) {
 				spin_unlock(&transaction->t_mark_lock);
 				kfree(buf);
+				/*printk(KERN_ERR "%d, 2: %d\n", transaction->t_tid, transaction->t_check_num);*/
 				return 2;
 			}
 
@@ -203,6 +217,7 @@ retry_mark:
 				spin_unlock(&transaction->t_mark_lock);
 				if (!force) {
 					kfree(buf);
+					/*printk(KERN_ERR "%d, 3: %d\n", transaction->t_tid, transaction->t_check_num);*/
 					return 1;
 				} else {
 					schedule();
@@ -214,6 +229,7 @@ retry_mark:
 			goto retry_mark;
 		}
 
+		list_del_init(&cur_mark->pos);
 		cur_mark->state = 1;
 		spin_unlock(&transaction->t_mark_lock);
 
@@ -238,9 +254,11 @@ retry_mark:
 
 			if (!force) {
 				spin_lock(&transaction->t_mark_lock);
+				list_add(&cur_mark->pos, &transaction->t_check_mark_list);
 				cur_mark->state = 0;
 				spin_unlock(&transaction->t_mark_lock);
 				kfree(buf);
+				/*printk(KERN_ERR "%d, 4: %d\n", transaction->t_tid, transaction->t_check_num);*/
 				return 3;
 			}
 
@@ -256,7 +274,6 @@ retry_mark:
 mark_complete:
 		spin_lock(&transaction->t_mark_lock);
 		// complete list로 이동
-		list_del(&cur_mark->pos);
 		transaction->t_check_num--;
 		cur_mark->state = 0;
 		if (rel_transaction == transaction || 
@@ -269,6 +286,7 @@ mark_complete:
 		if (unlikely(ZERO_OR_NULL_PTR(transaction))) {
 			spin_unlock(&transaction->t_mark_lock);
 			kfree(buf);
+			/*printk(KERN_ERR "%d, 5: %d\n", transaction->t_tid, transaction->t_check_num);*/
 			return 2;
 		}
 	}
@@ -279,6 +297,7 @@ mark_complete:
 	spin_unlock(&transaction->t_mark_lock);
 	kfree(buf);
 
+	/*printk(KERN_ERR "%d, 6: %d\n", transaction->t_tid, transaction->t_check_num);*/
 	return 0;
 }
 
@@ -448,7 +467,6 @@ restart:
 	    transaction->t_tid != this_tid)
 		goto out;
 
-
 	// real commit이 아니면 real commit이 될 때까지BFS 진행
 	spin_lock(&transaction->t_mark_lock);
 	if (!transaction->t_real_commit) {
@@ -478,6 +496,10 @@ restart:
 		jh = transaction->t_checkpoint_list;
 		bh = jh2bh(jh);
 
+		if (buffer_metadirty(bh))
+			printk(KERN_ERR "metadirty buff\n");
+		if (!buffer_mapped(bh))
+			printk(KERN_ERR "not mapped buff\n");
 		if (buffer_locked(bh)) {
 			spin_unlock(&journal->j_list_lock);
 			get_bh(bh);
@@ -774,7 +796,7 @@ void __zj_journal_clean_checkpoint_list(zjournal_t *journal, bool destroy)
 			// real commit이 되었다면 dirty mark를 찍어준다.
 			if (!rt) {
 				spin_lock(&journal->j_list_lock);
-				if ( transaction->t_cpnext &&
+				if (transaction->t_cpnext && 
 				transaction->t_checkpoint_list == NULL &&
 				transaction->t_checkpoint_io_list == NULL) {
 					__zj_journal_drop_transaction(journal, transaction);
@@ -796,11 +818,21 @@ void __zj_journal_clean_checkpoint_list(zjournal_t *journal, bool destroy)
 		// TX를 지웠으면 1 아니면 0
 		ret = journal_clean_one_cp_list(transaction->t_checkpoint_list,
 						destroy);
+		/*printk(KERN_ERR "ret: %d, clean %d, %d, real: %d, cur_cp_buf: %d, last_one: %d\n", ret, journal->j_core_id, transaction->t_tid, transaction->t_real_commit, transaction->t_cp_buffer_num, journal->j_transaction_sequence);*/
 		/*
 		 * This function only frees up some memory if possible so we
 		 * dont have an obligation to finish processing. Bail out if
 		 * preemption requested:
 		 */
+		//if (transaction->t_checkpoint_list == NULL &&
+		//	transaction->t_checkpoint_io_list == NULL) {
+		//	if (transaction->t_real_commit) {
+		//		printk(KERN_ERR "free in clean_cp (%d, %d)\n", journal->j_core_id, transaction->t_tid);
+		//		__zj_journal_drop_transaction(journal, transaction);
+		//		zj_journal_free_transaction(transaction);
+		//		ret = 1;
+		//	}
+		//}
 		if (need_resched())
 			return;
 		if (ret)
@@ -883,6 +915,7 @@ int __zj_journal_remove_checkpoint(struct zjournal_head *jh)
 
 	JBUFFER_TRACE(jh, "removing from transaction");
 	__buffer_unlink(jh);
+	transaction->t_cp_buffer_num--;
 	jh->b_cp_transaction = NULL;
 	clear_buffer_checkpoint(jh2bh(jh));
 	zj_journal_put_zjournal_head(jh);
@@ -948,6 +981,7 @@ void __zj_journal_insert_checkpoint(struct zjournal_head *jh,
 		jh->b_cpnext->b_cpprev = jh;
 	}
 	transaction->t_checkpoint_list = jh;
+	transaction->t_cp_buffer_num++;
 }
 
 /*
@@ -978,9 +1012,17 @@ void __zj_journal_drop_transaction(zjournal_t *journal, ztransaction_t *transact
 	}
 
 
+	while (!list_empty(&transaction->t_complete_mark_list)) {
+		commit_entry_t *tc = list_entry(transaction->t_complete_mark_list.next, 
+				commit_entry_t, pos);
+		list_del_init(&tc->pos);
+		zj_free_commit(tc);
+	}
+
 	zj_journal_free_commit_list(transaction->t_commit_list);
 
 	J_ASSERT(list_empty(&transaction->t_check_mark_list));
+	J_ASSERT(list_empty(&transaction->t_complete_mark_list));
 
 	J_ASSERT(transaction->t_real_commit == 1);
 	J_ASSERT(transaction->t_state == T_FINISHED);

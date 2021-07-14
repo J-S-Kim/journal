@@ -535,6 +535,9 @@ struct zj_journal_handle
 	unsigned int		h_requested_credits;
 
 	unsigned int		saved_alloc_context;
+
+	struct list_head	h_transaction_list;
+	spinlock_t		    h_mark_lock;
 };
 
 
@@ -618,6 +621,7 @@ struct ztransaction_s
 
 	/* Number of buffers on the t_buffers list [j_list_lock] */
 	int			t_nr_buffers;
+	int			t_nr_shadows;
 
 	/*
 	 * Doubly-linked circular list of all buffers reserved but not yet
@@ -666,6 +670,7 @@ struct ztransaction_s
 	struct list_head	t_check_mark_list;
 	struct list_head	t_complete_mark_list;
     int t_check_num;
+    int t_cp_buffer_num;
     int t_check_num_max;
 
     struct list_head  *t_commit_list;

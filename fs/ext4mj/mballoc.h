@@ -93,6 +93,8 @@ struct ext4mj_free_data {
 	ext4mj_grpblk_t			efd_count;
 
 	/* transaction which freed this extent */
+    /* for multi journal*/
+	int				    efd_core;
 	tid_t				efd_tid;
 };
 

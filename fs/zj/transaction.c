@@ -33,6 +33,9 @@
 
 #include <trace/events/zj.h>
 
+extern int tunmap1, tunmap2, tunmap3, tunmap4, tunmap5, tunmap6, tunmap7, tunmap8, tunmap9;
+extern int tforget_total, tforget1, tforget2, tforget3, tforget4, tforget5, tforget6;
+
 static void __zj_zjournal_temp_unlink_buffer(struct zjournal_head *jh);
 static void __zj_journal_unfile_buffer(struct zjournal_head *jh);
 
@@ -138,6 +141,7 @@ zj_get_transaction(zjournal_t *journal, ztransaction_t *transaction, struct list
 	transaction->t_start = jiffies;
 	transaction->t_requested = 0;
 	transaction->t_real_commit = 0;
+	transaction->t_cp_buffer_num = 0;
 
 	return transaction;
 }
@@ -299,6 +303,32 @@ static int add_transaction_credits(zjournal_t *journal, int blocks,
 	return 0;
 }
 
+static inline void add_mark_for_updates(handle_t *handle, ztransaction_t *transaction, 
+						int j_core_id, int t_tid)
+{
+	commit_entry_t *my_commit;
+
+	spin_lock(&handle->h_mark_lock);
+	if (zj_check_mark_value_in_list(&handle->h_transaction_list, j_core_id, t_tid)) {
+		spin_unlock(&handle->h_mark_lock);
+		return;
+	}
+	spin_unlock(&handle->h_mark_lock);
+
+	if (transaction) {
+		atomic_inc(&transaction->t_updates);
+		atomic_inc(&transaction->t_handle_count);
+	}
+
+	my_commit = zj_alloc_commit(GFP_ATOMIC);
+	my_commit->core = j_core_id;
+	my_commit->tid = t_tid;
+
+	spin_lock(&handle->h_mark_lock);
+	list_add(&my_commit->pos, &handle->h_transaction_list);
+	spin_unlock(&handle->h_mark_lock);
+}
+
 /*
  * start_this_handle: Given a handle, deal with any locking or stalling
  * needed to make sure that there is enough journal space for the handle
@@ -348,7 +378,7 @@ alloc_transaction:
 		if (!new_transaction)
 			return -ENOMEM;
 
-		new_percpu_list = kmem_cache_zalloc(commit_list_cache, gfp_mask);
+		new_percpu_list = kmem_cache_alloc(commit_list_cache, gfp_mask | __GFP_ZERO);
 		if (!new_percpu_list) {
 			zj_journal_free_transaction(new_transaction);
 			return -ENOMEM;
@@ -423,8 +453,8 @@ repeat:
 	handle->h_transaction = transaction;
 	handle->h_requested_credits = blocks;
 	handle->h_start_jiffies = jiffies;
-	atomic_inc(&transaction->t_updates);
-	atomic_inc(&transaction->t_handle_count);
+	/*printk(KERN_ERR "add mark for update (%d, %d)\n",transaction->t_journal->j_core_id , transaction->t_tid );*/
+	add_mark_for_updates(handle, transaction, transaction->t_journal->j_core_id , transaction->t_tid);
 	jbd_debug(4, "Handle %p given %d credits (total %d, free %lu)\n",
 		  handle, blocks,
 		  atomic_read(&transaction->t_outstanding_credits),
@@ -452,6 +482,8 @@ static handle_t *new_handle(int nblocks)
 		return NULL;
 	handle->h_buffer_credits = nblocks;
 	handle->h_ref = 1;
+	INIT_LIST_HEAD(&handle->h_transaction_list);
+	spin_lock_init(&handle->h_mark_lock);
 
 	return handle;
 }
@@ -840,6 +872,7 @@ void zj_shadow(struct buffer_head *orig_bh, struct zjournal_head *orig_jh,
 		struct zjournal_head *jh, struct buffer_head *bh, char *data, int background) 
 {
 	struct zjournal_head **list;
+	int jlist;
 	ztransaction_t *transaction = orig_jh->b_transaction;
 	zjournal_t *journal = transaction->t_journal;
 	struct page *page, *new_page;
@@ -878,7 +911,18 @@ void zj_shadow(struct buffer_head *orig_bh, struct zjournal_head *orig_jh,
 
 	//replace Metadata list orig_jh <-> jh
 	spin_lock(&journal->j_list_lock);
-	list = &orig_jh->b_transaction->t_buffers;
+	jlist = orig_jh->b_jlist;
+	switch (jlist) {
+	case BJ_Metadata:
+		list = &orig_jh->b_transaction->t_buffers;
+		break;
+	case BJ_Reserved:
+		list = &orig_jh->b_transaction->t_reserved_list;
+		break;
+	default:
+		printk(KERN_ERR "%s: jlist %d\n", __func__, jlist);
+		break;
+	}
 	if (*list == orig_jh) {
 		*list = jh;
 	}
@@ -889,7 +933,7 @@ void zj_shadow(struct buffer_head *orig_bh, struct zjournal_head *orig_jh,
 	orig_jh->b_tnext = orig_jh->b_tprev = NULL;
 	spin_unlock(&journal->j_list_lock);
 
-	jh->b_jlist = BJ_Metadata;
+	jh->b_jlist = jlist;
 	jh->b_transaction = transaction;
 	jh->b_orig = orig_jh;
 	orig_jh->b_orig = jh;
@@ -920,24 +964,35 @@ static inline void add_commit_mark_two_side(zjournal_t *journal, ztransaction_t 
 	commit_entry_t *my_commit, *counter_commit;
 
 	//check exist
+	spin_lock(&transaction->t_mark_lock);
 	list_for_each(pos, my_head) {
 		commit_entry_t *tmp = list_entry(pos, commit_entry_t, pos);
-		if (tmp->core == counter_core && tmp->tid == counter_tid)
+		if (tmp->core == counter_core && tmp->tid == counter_tid) {
+			spin_unlock(&transaction->t_mark_lock);
 			return;
+		}
 	}
+	spin_unlock(&transaction->t_mark_lock);
 
 	//add local
 	my_commit = zj_alloc_commit(GFP_ATOMIC);
 	my_commit->core = counter_core;
 	my_commit->tid = counter_tid;
+	spin_lock(&transaction->t_mark_lock);
 	list_add(&my_commit->pos, my_head);
+	spin_unlock(&transaction->t_mark_lock);
 
 	//add remote
 	counter_head = &jtransaction->t_commit_list[core];
 	counter_commit = zj_alloc_commit(GFP_ATOMIC);
 	counter_commit->core = my_core;
 	counter_commit->tid = my_tid;
+	spin_lock(&jtransaction->t_mark_lock);
 	list_add(&counter_commit->pos, counter_head);
+	spin_unlock(&jtransaction->t_mark_lock);
+
+	if (core != smp_processor_id())
+		printk(KERN_ERR "%s\n", __func__);
 
 	return;
 }
@@ -953,17 +1008,26 @@ static inline void add_commit_mark_only_mine(zjournal_t *journal, ztransaction_t
 	commit_entry_t *my_commit;
 
 	//check exist
+	spin_lock(&transaction->t_mark_lock);
 	list_for_each(pos, my_head) {
 		commit_entry_t *tmp = list_entry(pos, commit_entry_t, pos);
-		if (tmp->core == counter_core && tmp->tid == counter_tid)
+		if (tmp->core == counter_core && tmp->tid == counter_tid) {
+			spin_unlock(&transaction->t_mark_lock);
 			return;
+		}
 	}
+	spin_unlock(&transaction->t_mark_lock);
 
 	//add local
 	my_commit = zj_alloc_commit(GFP_ATOMIC);
 	my_commit->core = counter_core;
 	my_commit->tid = counter_tid;
+	spin_lock(&transaction->t_mark_lock);
 	list_add(&my_commit->pos, my_head);
+	spin_unlock(&transaction->t_mark_lock);
+
+	if (core != smp_processor_id())
+		printk(KERN_ERR "%s\n", __func__);
 
 }
 /*
@@ -1081,13 +1145,16 @@ repeat:
 
 		read_lock(&jjournal->j_state_lock);
 		if (jtransaction->t_state <= T_LOCKED) {
+			add_mark_for_updates(handle, jtransaction, jjournal->j_core_id , jtransaction->t_tid);
+			add_commit_mark_two_side(journal, transaction, jjournal, jtransaction);
 			read_unlock(&jjournal->j_state_lock);
 			//add two side
-			add_commit_mark_two_side(journal, transaction, jjournal, jtransaction);
+	/*printk(KERN_ERR "add mark for update (%d, %d)\n",jjournal->j_core_id , jtransaction->t_tid);*/
 			goto done;
 		} else {
-			read_unlock(&jjournal->j_state_lock);
 			add_commit_mark_only_mine(journal, transaction, jjournal, jtransaction);
+			read_unlock(&jjournal->j_state_lock);
+	/*printk(KERN_ERR "add mark for update (%d, %d)\n",jjournal->j_core_id , jtransaction->t_tid);*/
 		}
 	}
 
@@ -1126,6 +1193,9 @@ repeat:
 			goto repeat;
 		}
 
+		if (jh->b_jlist == BJ_None)
+			goto attach_next;
+
 		zj_shadow(bh, jh, frozen_jh, frozen_bh, frozen_buffer, 0);
 
 		J_ASSERT_BH(bh, buffer_jbddirty(bh));
@@ -1136,6 +1206,11 @@ repeat:
 		frozen_jh = NULL;
 	}
 
+	jh->b_cpcount++;
+	jh->b_transaction = NULL;
+	jh->b_jlist = BJ_None;
+	zj_journal_put_zjournal_head(jh);
+
 attach_next:
 	/*
 	 * Make sure all stores to jh (b_modified, b_frozen_data) are visible
@@ -1145,11 +1220,6 @@ attach_next:
 	smp_wmb();
 	jh->b_modified = 0;
 	jh->modified_handle = handle;
-
-	jh->b_cpcount++;
-	jh->b_transaction = NULL;
-	jh->b_jlist = BJ_None;
-	zj_journal_put_zjournal_head(jh);
 
 	spin_lock(&journal->j_list_lock);
 	__zj_journal_file_buffer(jh, transaction, BJ_Reserved);
@@ -1302,9 +1372,15 @@ int zj_journal_get_create_access(handle_t *handle, struct buffer_head *bh)
 	 * reused here.
 	 */
 	jbd_lock_bh_state(bh);
+	if (jh->b_transaction != transaction 
+	    && jh->b_transaction 
+	    && (jh->b_transaction->t_state <= T_LOCKED 
+		|| jh->b_jlist != BJ_Forget)) {
+		panic("%s", __func__);
+	}
 	J_ASSERT_JH(jh, (jh->b_transaction == transaction ||
 		jh->b_transaction == NULL ||
-		(jh->b_transaction == journal->j_committing_transaction &&
+		(jh->b_transaction->t_state > T_LOCKED &&
 			  jh->b_jlist == BJ_Forget)));
 
 	J_ASSERT_JH(jh, jh->b_next_transaction == NULL);
@@ -1677,10 +1753,17 @@ int zj_journal_forget (handle_t *handle, struct buffer_head *bh)
 		 * we know to remove the checkpoint after we commit.
 		 */
 
-		spin_lock(&jjournal->j_list_lock);
 		if (jh->b_cp_transaction) {
-			__zj_journal_file_buffer(jh, jtransaction, BJ_Forget);
+			spin_lock(&jjournal->j_list_lock);
+			__zj_zjournal_temp_unlink_buffer(jh);
+			jh->b_transaction = NULL;
+			spin_unlock(&jjournal->j_list_lock);
+
+			spin_lock(&journal->j_list_lock);
+			__zj_journal_file_buffer(jh, transaction, BJ_Forget);
+			spin_unlock(&journal->j_list_lock);
 		} else {
+			spin_lock(&jjournal->j_list_lock);
 			__zj_journal_unfile_buffer(jh);
 			if (!buffer_jbd(bh)) {
 				spin_unlock(&jjournal->j_list_lock);
@@ -1688,8 +1771,8 @@ int zj_journal_forget (handle_t *handle, struct buffer_head *bh)
 				__bforget(bh);
 				goto drop;
 			}
+			spin_unlock(&jjournal->j_list_lock);
 		}
-		spin_unlock(&jjournal->j_list_lock);
 	} else if (jh->b_cpcount) {
 		JBUFFER_TRACE(jh, "belongs to older transaction");
 
@@ -1766,6 +1849,7 @@ int zj_journal_stop(handle_t *handle)
 		} else {
 			if (handle->h_rsv_handle)
 				zj_free_handle(handle->h_rsv_handle);
+			printk(KERN_ERR "%s: free and exit\n", __func__);
 			goto free_and_exit;
 		}
 	}
@@ -1889,17 +1973,33 @@ int zj_journal_stop(handle_t *handle)
 	 * once we do this, we must not dereference transaction
 	 * pointer again.
 	 */
-	tid = transaction->t_tid;
-	if (atomic_dec_and_test(&transaction->t_updates)) {
-		wake_up(&journal->j_wait_updates);
-		if (journal->j_barrier_count)
-			wake_up(&journal->j_wait_transaction_locked);
+	spin_lock(&handle->h_mark_lock);
+	while (!list_empty(&handle->h_transaction_list)) {
+		zjournal_t *jjournal;
+		commit_entry_t *tc = list_entry(handle->h_transaction_list.next, commit_entry_t, pos);
+		ztransaction_t *jtransaction = zj_get_target_transaction(journal, tc->core, tc->tid);
+
+		list_del(&tc->pos);
+		spin_unlock(&handle->h_mark_lock);
+
+		zj_free_commit(tc);
+		jjournal = jtransaction->t_journal;
+
+		tid = jtransaction->t_tid;
+		if (atomic_dec_and_test(&jtransaction->t_updates)) {
+			wake_up(&jjournal->j_wait_updates);
+			if (jjournal->j_barrier_count)
+				wake_up(&jjournal->j_wait_transaction_locked);
+		}
+
+		if (wait_for_commit)
+			err = zj_log_wait_commit(jjournal, tid);
+		spin_lock(&handle->h_mark_lock);
 	}
+	spin_unlock(&handle->h_mark_lock);
 
-	rwsem_release(&journal->j_trans_commit_map, 1, _THIS_IP_);
+	rwsem_release(&jjournal->j_trans_commit_map, 1, _THIS_IP_);
 
-	if (wait_for_commit)
-		err = zj_log_wait_commit(journal, tid);
 
 	if (handle->h_rsv_handle)
 		zj_journal_free_reserved(handle->h_rsv_handle);
@@ -2008,6 +2108,7 @@ static void __zj_zjournal_temp_unlink_buffer(struct zjournal_head *jh)
 		list = &transaction->t_forget;
 		break;
 	case BJ_Shadow:
+		transaction->t_nr_shadows--;
 		list = &transaction->t_shadow_list;
 		break;
 	case BJ_Reserved:
@@ -2061,6 +2162,7 @@ __zjournal_try_to_free_buffer(zjournal_t *journal, struct buffer_head *bh)
 {
 	struct zjournal_head *jh;
 	zjournal_t *cp_journal;
+	/*printk(KERN_ERR "%s-1\n", __func__);*/
 
 	jh = bh2jh(bh);
 
@@ -2079,6 +2181,7 @@ __zjournal_try_to_free_buffer(zjournal_t *journal, struct buffer_head *bh)
 			spin_unlock(&journal->j_list_lock);
 			spin_lock(&cp_journal->j_list_lock);
 		}
+		/*printk(KERN_ERR "%s-2\n", __func__);*/
 		__zj_journal_remove_checkpoint(jh);
 		if (journal != cp_journal) {
 			spin_unlock(&cp_journal->j_list_lock);
@@ -2182,6 +2285,7 @@ static int __dispose_buffer(struct zjournal_head *jh, ztransaction_t *transactio
 	int may_free = 1;
 	struct buffer_head *bh = jh2bh(jh);
 
+	/*printk(KERN_ERR "%s: %p (%d, %d)\n", __func__, jh, transaction->t_journal->j_core_id, transaction->t_tid);*/
 	if (jh->b_cp_transaction) {
 		JBUFFER_TRACE(jh, "on running+cp transaction");
 		__zj_zjournal_temp_unlink_buffer(jh);
@@ -2308,16 +2412,19 @@ static int journal_unmap_buffer(zjournal_t *journal, struct buffer_head *bh,
 		transaction = jh->b_transaction;
 		if (transaction == NULL) {
 			if (!jh->b_cp_transaction) {
+				tunmap1++;
 				JBUFFER_TRACE(jh, "not on any transaction: zap");
 				goto zap_buffer;
 			}
 			if (jh->b_cp_transaction->t_real_commit && !buffer_dirty(bh)) {
+				tunmap2++;
 				/* bdflush has written it.  We can drop it now */
 				if ((transaction = jh->b_cp_transaction) != NULL) {
 					jjournal = transaction->t_journal;
 					spin_unlock(&journal->j_list_lock);
 					spin_lock(&jjournal->j_list_lock);
 				}
+				/*printk(KERN_ERR "%s-1\n", __func__);*/
 				__zj_journal_remove_checkpoint(jh);
 				if (jjournal) {
 					spin_unlock(&jjournal->j_list_lock);
@@ -2331,6 +2438,7 @@ static int journal_unmap_buffer(zjournal_t *journal, struct buffer_head *bh,
 			 * written fully to disk: it's metadata or
 			 * journaled data... */
 			if (journal->j_running_transaction) {
+				tunmap3++;
 				/* ... and once the current transaction has
 				 * committed, the buffer won't be needed any
 				 * longer. */
@@ -2339,6 +2447,7 @@ static int journal_unmap_buffer(zjournal_t *journal, struct buffer_head *bh,
 						journal->j_running_transaction);
 				goto zap_buffer;
 			} else {
+				tunmap4++;
 				/* There is no currently-running transaction. So the
 				 * orphan record which we wrote for this file must have
 				 * passed into commit.  We must attach this buffer to
@@ -2361,6 +2470,7 @@ static int journal_unmap_buffer(zjournal_t *journal, struct buffer_head *bh,
 						spin_unlock(&journal->j_list_lock);
 						spin_lock(&jjournal->j_list_lock);
 					}
+				/*printk(KERN_ERR "%s-2\n", __func__);*/
 					__zj_journal_remove_checkpoint(jh);
 					if (jjournal) {
 						spin_unlock(&jjournal->j_list_lock);
@@ -2370,6 +2480,7 @@ static int journal_unmap_buffer(zjournal_t *journal, struct buffer_head *bh,
 				}
 			}
 		} else if (transaction->t_state <= T_LOCKED) {
+			tunmap5++;
 			/* Good, the buffer belongs to the running transaction.
 			 * We are writing our own transaction's data, not any
 			 * previous one's, so it is safe to throw it away
@@ -2391,10 +2502,12 @@ static int journal_unmap_buffer(zjournal_t *journal, struct buffer_head *bh,
 				spin_lock(&journal->j_list_lock);
 			}
 		} else {
+			tunmap6++;
 			goto now_committing;
 		}
 	} else {
 now_committing:
+		tunmap7++;
 		JBUFFER_TRACE(jh, "on committing transaction");
 		/*
 		 * The buffer is committing, we simply cannot touch
@@ -2402,6 +2515,7 @@ now_committing:
 		 * for commit and try again.
 		 */
 		if (partial_page) {
+			tunmap9++;
 			zj_journal_put_zjournal_head(jh);
 			spin_unlock(&journal->j_list_lock);
 			jbd_unlock_bh_state(bh);
@@ -2416,6 +2530,7 @@ now_committing:
 		 */
 		set_buffer_freed(bh);
 		if (journal->j_running_transaction && buffer_jbddirty(bh)) {
+			tunmap8++;
 			transaction = jh->b_transaction;
 			if (transaction)
 				jjournal = transaction->t_journal;
@@ -2448,6 +2563,7 @@ now_committing:
 #endif
 
 zap_buffer:
+	set_buffer_metadirty(bh);
 	/*
 	 * This is tricky. Although the buffer is truncated, it may be reused
 	 * if blocksize < pagesize and it is attached to the page straddling
@@ -2464,7 +2580,7 @@ zap_buffer_no_jh:
 	write_unlock(&journal->j_state_lock);
 zap_buffer_unlocked:
 	clear_buffer_dirty(bh);
-	J_ASSERT_BH(bh, !buffer_jbddirty(bh));
+	/*J_ASSERT_BH(bh, !buffer_jbddirty(bh));*/
 	clear_buffer_mapped(bh);
 	clear_buffer_req(bh);
 	clear_buffer_new(bh);
@@ -2593,6 +2709,7 @@ void __zj_journal_file_buffer(struct zjournal_head *jh,
 		list = &transaction->t_forget;
 		break;
 	case BJ_Shadow:
+		transaction->t_nr_shadows++;
 		list = &transaction->t_shadow_list;
 		break;
 	case BJ_Reserved:
@@ -2635,8 +2752,15 @@ void __zj_journal_refile_buffer(struct zjournal_head *jh)
 	ztransaction_t *old_transaction;
 
 	J_ASSERT_JH(jh, jbd_is_locked_bh_state(bh));
-	if (jh->b_transaction)
+	if (jh->b_transaction) {
+		if (!spin_is_locked(&jh->b_transaction->t_journal->j_list_lock)) {
+			printk(KERN_ERR "%s: jh's TX's state: (%d, %d) %d, jh's cp count: %d, jh's b_orig: %p\n", __func__, 
+					jh->b_transaction->t_journal->j_core_id, jh->b_transaction->t_tid,
+					jh->b_transaction->t_state, jh->b_cpcount, jh->b_orig);
+			panic("not locked");
+		}
 		assert_spin_locked(&jh->b_transaction->t_journal->j_list_lock);
+	}
 
 	/* If the buffer is now unused, just drop it. */
 	if (jh->b_next_transaction == NULL) {

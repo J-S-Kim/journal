@@ -2875,7 +2875,7 @@ static void ext4mj_free_data_in_buddy(struct super_block *sb,
  * This function is called by the zj layer once the commit has finished,
  * so we know we can free the blocks that were released with that commit.
  */
-void ext4mj_process_freed_data(struct super_block *sb, tid_t commit_tid)
+void ext4mj_process_freed_data(struct super_block *sb, int commit_core, tid_t commit_tid)
 {
 	struct ext4mj_sb_info *sbi = EXT4MJ_SB(sb);
 	struct ext4mj_free_data *entry, *tmp;
@@ -2887,14 +2887,19 @@ void ext4mj_process_freed_data(struct super_block *sb, tid_t commit_tid)
 	INIT_LIST_HEAD(&freed_data_list);
 
 	spin_lock(&sbi->s_md_lock);
-	list_for_each_entry(entry, &sbi->s_freed_data_list, efd_list) {
-		if (entry->efd_tid != commit_tid)
-			break;
-		cut_pos = &entry->efd_list;
+	list_for_each_entry_safe(entry, tmp, &sbi->s_freed_data_list, efd_list) {
+		/*if (entry->efd_tid != commit_tid)*/
+			/*break;*/
+		/*cut_pos = &entry->efd_list;*/
+		if (entry->efd_tid == commit_tid 
+		    && entry->efd_core == commit_core) {
+			list_del(&entry->efd_list);
+			list_add_tail(&entry->efd_list, &freed_data_list);
+		}
 	}
-	if (cut_pos)
-		list_cut_position(&freed_data_list, &sbi->s_freed_data_list,
-				  cut_pos);
+	/*if (cut_pos)*/
+		/*list_cut_position(&freed_data_list, &sbi->s_freed_data_list,*/
+				  /*cut_pos);*/
 	spin_unlock(&sbi->s_md_lock);
 
 	if (test_opt(sb, DISCARD)) {
@@ -4930,6 +4935,7 @@ do_more:
 		new_entry->efd_group = block_group;
 		new_entry->efd_count = count_clusters;
 		new_entry->efd_tid = handle->h_transaction->t_tid;
+		new_entry->efd_core = handle->h_transaction->t_journal->j_core_id;
 
 		ext4mj_lock_group(sb, block_group);
 		mb_clear_bits(bitmap_bh->b_data, bit, count_clusters);
