@@ -39,10 +39,13 @@ extern int tforget_total, tforget1, tforget2, tforget3, tforget4, tforget5, tfor
 static void __zj_zjournal_temp_unlink_buffer(struct zjournal_head *jh);
 static void __zj_journal_unfile_buffer(struct zjournal_head *jh);
 
+static int num_journals;
+
 static struct kmem_cache *transaction_cache;
 static struct kmem_cache *commit_list_cache;
 int __init zj_journal_init_transaction_cache(void)
 {
+	num_journals = num_online_cpus();
 	J_ASSERT(!transaction_cache);
 	transaction_cache = kmem_cache_create("zj_transaction_s",
 			sizeof(ztransaction_t),
@@ -52,7 +55,7 @@ int __init zj_journal_init_transaction_cache(void)
 
 	J_ASSERT(!commit_list_cache);
 	commit_list_cache = kmem_cache_create("zj_commit_list_s",
-			sizeof(struct list_head) * 80,
+			sizeof(struct list_head) * num_journals,
 			0,
 			SLAB_HWCACHE_ALIGN|SLAB_TEMPORARY,
 			NULL);
@@ -128,7 +131,7 @@ zj_get_transaction(zjournal_t *journal, ztransaction_t *transaction, struct list
 
 	transaction->t_commit_list = percpu_list;
 
-	for (cpu = 0; cpu < 80; cpu++)
+	for (cpu = 0; cpu < num_journals; cpu++)
 		INIT_LIST_HEAD(&transaction->t_commit_list[cpu]);
 
 	/* Set up the commit timer for the new transaction. */
@@ -964,32 +967,32 @@ static inline void add_commit_mark_two_side(zjournal_t *journal, ztransaction_t 
 	commit_entry_t *my_commit, *counter_commit;
 
 	//check exist
-	spin_lock(&transaction->t_mark_lock);
+	/*spin_lock(&transaction->t_mark_lock);*/
 	list_for_each(pos, my_head) {
 		commit_entry_t *tmp = list_entry(pos, commit_entry_t, pos);
 		if (tmp->core == counter_core && tmp->tid == counter_tid) {
-			spin_unlock(&transaction->t_mark_lock);
+			/*spin_unlock(&transaction->t_mark_lock);*/
 			return;
 		}
 	}
-	spin_unlock(&transaction->t_mark_lock);
+	/*spin_unlock(&transaction->t_mark_lock);*/
 
 	//add local
 	my_commit = zj_alloc_commit(GFP_ATOMIC);
 	my_commit->core = counter_core;
 	my_commit->tid = counter_tid;
-	spin_lock(&transaction->t_mark_lock);
+	/*spin_lock(&transaction->t_mark_lock);*/
 	list_add(&my_commit->pos, my_head);
-	spin_unlock(&transaction->t_mark_lock);
+	/*spin_unlock(&transaction->t_mark_lock);*/
 
 	//add remote
 	counter_head = &jtransaction->t_commit_list[core];
 	counter_commit = zj_alloc_commit(GFP_ATOMIC);
 	counter_commit->core = my_core;
 	counter_commit->tid = my_tid;
-	spin_lock(&jtransaction->t_mark_lock);
+	/*spin_lock(&jtransaction->t_mark_lock);*/
 	list_add(&counter_commit->pos, counter_head);
-	spin_unlock(&jtransaction->t_mark_lock);
+	/*spin_unlock(&jtransaction->t_mark_lock);*/
 
 	if (core != smp_processor_id())
 		printk(KERN_ERR "%s\n", __func__);
@@ -1008,23 +1011,23 @@ static inline void add_commit_mark_only_mine(zjournal_t *journal, ztransaction_t
 	commit_entry_t *my_commit;
 
 	//check exist
-	spin_lock(&transaction->t_mark_lock);
+	/*spin_lock(&transaction->t_mark_lock);*/
 	list_for_each(pos, my_head) {
 		commit_entry_t *tmp = list_entry(pos, commit_entry_t, pos);
 		if (tmp->core == counter_core && tmp->tid == counter_tid) {
-			spin_unlock(&transaction->t_mark_lock);
+			/*spin_unlock(&transaction->t_mark_lock);*/
 			return;
 		}
 	}
-	spin_unlock(&transaction->t_mark_lock);
+	/*spin_unlock(&transaction->t_mark_lock);*/
 
 	//add local
 	my_commit = zj_alloc_commit(GFP_ATOMIC);
 	my_commit->core = counter_core;
 	my_commit->tid = counter_tid;
-	spin_lock(&transaction->t_mark_lock);
+	/*spin_lock(&transaction->t_mark_lock);*/
 	list_add(&my_commit->pos, my_head);
-	spin_unlock(&transaction->t_mark_lock);
+	/*spin_unlock(&transaction->t_mark_lock);*/
 
 	if (core != smp_processor_id())
 		printk(KERN_ERR "%s\n", __func__);
@@ -1978,6 +1981,10 @@ int zj_journal_stop(handle_t *handle)
 		zjournal_t *jjournal;
 		commit_entry_t *tc = list_entry(handle->h_transaction_list.next, commit_entry_t, pos);
 		ztransaction_t *jtransaction = zj_get_target_transaction(journal, tc->core, tc->tid);
+
+		if (!jtransaction) {
+			printk(KERN_ERR "cur(%d, %d) target(%d, %d)\n", journal->j_core_id, transaction->t_tid, tc->core, tc->tid);
+		}
 
 		list_del(&tc->pos);
 		spin_unlock(&handle->h_mark_lock);

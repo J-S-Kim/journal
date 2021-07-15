@@ -45,7 +45,7 @@
 #include <linux/compat.h>
 #endif
 
-//#define PER_GROUP_ALLOC
+#define PER_GROUP_ALLOC
 /*
  * The fourth extended filesystem constants/structures
  */
@@ -1340,7 +1340,8 @@ struct ext4mj_super_block {
 	__le32	s_reserved[98];		/* Padding to the end of the block */
 	__le32	s_checksum;		/* crc32c(superblock) */
 #define s_journal_inum _s_journal_inum[0]
-/*E0*/	__le32	_s_journal_inum[EXT4MJ_NUM_JOURNALS];		/* inode number of journal file */
+/*E0 first: start inum, second: number of journals*/
+    __le32	_s_journal_inum[2];		
 /* cassiano:: the journals are added in the end, so we don't mess up with the
  * on-disk datastructure for the multiple journals */
 };

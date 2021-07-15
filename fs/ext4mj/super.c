@@ -3420,7 +3420,7 @@ int ext4mj_calculate_overhead(struct super_block *sb)
 		if (sbi->_s_journal[i] && !sbi->journal_bdev)
 			overhead += EXT4MJ_NUM_B2C(sbi, sbi->_s_journal[i]->j_maxlen);
 		else if (ext4mj_has_feature_journal(sb) && !sbi->_s_journal[i]) {
-			j_inum = le32_to_cpu(es->_s_journal_inum[i]);
+			j_inum = le32_to_cpu(es->_s_journal_inum[0]) + i;
 			j_inode = ext4mj_get_journal_inode(sb, j_inum);
 			if (j_inode) {
 				j_blocks = j_inode->i_size >> sb->s_blocksize_bits;
@@ -3543,8 +3543,9 @@ static int ext4mj_fill_super(struct super_block *sb, void *data, int silent)
 	es = (struct ext4mj_super_block *) (bh->b_data + offset);
 	sbi->s_es = es;
 	sb->s_magic = le16_to_cpu(es->s_magic);
-	if (sb->s_magic != EXT4_SUPER_MAGIC)
+	if (sb->s_magic != EXT4_SUPER_MAGIC) 
 		goto cantfind_ext4mj;
+	
 	sbi->s_kbytes_written = le64_to_cpu(es->s_kbytes_written);
 
 	/* Warn if metadata_csum and gdt_csum are both set. */
@@ -4829,15 +4830,13 @@ static int ext4mj_load_journal(struct super_block *sb,
 	if (journal_inum) {
 		/* cassiano:: iterate over journals to get
 		 * the journal stored in the journals array */
-		for (i = 0; i < EXT4MJ_NUM_JOURNALS; i++) {
-			if (!(journal_inum = le32_to_cpu(es->_s_journal_inum[i])))
-				break;
-			if (!(journals[i] = ext4mj_get_journal(sb, journal_inum))) {
+		num_journals = le32_to_cpu(es->_s_journal_inum[1]);
+		for (i = 0; i < num_journals; i++) {
+			if (!(journals[i] = ext4mj_get_journal(sb, journal_inum++))) {
 				err = -EINVAL;
 				goto out;
 			}
-			err |= ext4mj_load_journals_left(sb, es, really_read_only, journals[i], num_journals);
-			num_journals++;
+			err |= ext4mj_load_journals_left(sb, es, really_read_only, journals[i], i);
 		}
 	} else {
 		printk(KERN_ERR "No multi journal\n");

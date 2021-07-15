@@ -163,7 +163,7 @@ static int journal_submit_commit_record(zjournal_t *journal,
 
 	tagp = &bh->b_data[sizeof(struct commit_header)];
 
-	spin_lock(&commit_transaction->t_mark_lock);
+	/*spin_lock(&commit_transaction->t_mark_lock);*/
 	for_each_possible_cpu(cpu) {
 		struct list_head *rc = &commit_transaction->t_commit_list[cpu];
 		commit_entry_t *tc;
@@ -175,7 +175,7 @@ static int journal_submit_commit_record(zjournal_t *journal,
 			tagp += tag_bytes;
 		}
 	}
-	spin_unlock(&commit_transaction->t_mark_lock);
+	/*spin_unlock(&commit_transaction->t_mark_lock);*/
 	tag = (commit_block_tag_t *) tagp;
 	tag->core = cpu_to_be16(0 & (u16)~0);
 	tag->tid = cpu_to_be32(0 & (u32)~0);

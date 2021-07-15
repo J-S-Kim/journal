@@ -1859,30 +1859,21 @@ ztransaction_t *zj_get_target_transaction(zjournal_t *journal, int core, tid_t t
 
 	read_lock(&target_journal->j_state_lock);
 	spin_lock(&target_journal->j_list_lock);
-	/*target_transaction = */
-		/*target_journal->j_checkpoint_transactions;*/
 
-	/*if (!target_transaction) {*/
-		if (((target_transaction = 
-	               target_journal->j_committing_transaction) != NULL) &&
-		      target_transaction->t_tid == tid)
-			goto out;
+	if (((target_transaction = 
+	      target_journal->j_committing_transaction) != NULL) &&
+	      target_transaction->t_tid == tid)
+		goto out;
 
-		if ((target_transaction = 
-		       target_journal->j_running_transaction) != NULL &&
-		      target_transaction->t_tid == tid) 
-			goto out;
+	if ((target_transaction = 
+	     target_journal->j_running_transaction) != NULL &&
+	     target_transaction->t_tid == tid) 
+		goto out;
 
-	/*} else {*/
-		// tid가 가장 오래된 cp TX보다도 작다는 것은 해당 tid가 이미
-		// real commit되고 checkpointing되어 사라졌다는 것
+	target_transaction = radix_tree_lookup(&target_journal->j_checkpoint_txtree, tid);
 
-		// tid가 같은 cp TX를 찾아본다.
-		target_transaction = radix_tree_lookup(&target_journal->j_checkpoint_txtree, tid);
-		if (!target_transaction)
-			goto out;
-
-	/*}*/
+	if (!target_transaction)
+		goto out;
 
 	target_transaction = NULL;
 out:
