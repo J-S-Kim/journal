@@ -481,6 +481,8 @@ void zj_journal_commit_transaction(zjournal_t *journal)
 	J_ASSERT(journal->j_committing_transaction == NULL);
 
 	commit_transaction = journal->j_running_transaction;
+	if (commit_transaction->t_real_commit)
+		printk(KERN_ERR "(%d, %d) already real commit 0, state: %d\n", commit_transaction->t_journal->j_core_id, commit_transaction->t_tid, commit_transaction->t_real_commit_state);
 
 	trace_zj_start_commit(journal, commit_transaction);
 	jbd_debug(1, "ZJ: starting commit of transaction %d\n",
@@ -751,6 +753,9 @@ repeat_meta:
 		JBUFFER_TRACE(jh, "ph3: write metadata");
 		flags = zj_journal_write_metadata_buffer(commit_transaction,
 						jh, &wbuf[bufs], blocknr);
+		if (!jh || !jh2bh(jh)) {
+			panic("no jh2bh\n");
+		}
 		__brelse(jh2bh(jh));
 		if (flags < 0) {
 			zj_journal_abort(journal, flags);
@@ -1005,7 +1010,7 @@ start_journal_io:
 		struct list_head *rc = &commit_transaction->t_commit_list[cpu];
 
 		while (!list_empty(rc)) {
-			commit_entry_t *tc = list_entry(rc->next, commit_entry_t, pos);
+			commit_entry_t *tc = list_entry(rc->prev, commit_entry_t, pos);
 
 			list_del_init(&tc->pos);
 			if (zj_check_mark_in_list(&commit_transaction->t_check_mark_list, tc)) {
@@ -1013,7 +1018,10 @@ start_journal_io:
 				continue;
 			}
 			tc->state = 0;
+			tc->debug = 1;
 			list_add(&tc->pos, &commit_transaction->t_check_mark_list); 
+			if (commit_transaction->t_real_commit)
+				printk(KERN_ERR "(%d, %d) already real commit 1, state: %d\n", commit_transaction->t_journal->j_core_id, commit_transaction->t_tid, commit_transaction->t_real_commit_state);
 			commit_transaction->t_check_num++;
 		}
 	}
@@ -1183,6 +1191,8 @@ restart_loop:
 				clear_buffer_jbddirty(orig_bh);
 		} else {
 			J_ASSERT_BH(orig_bh, !buffer_dirty(orig_bh));
+			if (buffer_dirty(orig_bh))
+				panic("bdirty\n");
 			/*
 			 * The buffer on BJ_Forget list and not jbddirty means
 			 * it has been freed by this transaction and hence it
@@ -1233,10 +1243,10 @@ restart_loop:
 				if (!buffer_jbddirty(orig_bh)) {
 					try_to_free = 1;
 				} 
-				//else if (orig_jh->b_transaction == NULL && !orig_jh->b_cpcount && 
-				//		test_clear_buffer_jbddirty(orig_bh)) {
-				//	mark_buffer_dirty(orig_bh);	/* Expose it to the VM */
-				//}
+				else if (orig_jh->b_transaction == NULL && !orig_jh->b_cpcount && 
+						test_clear_buffer_jbddirty(orig_bh)) {
+					mark_buffer_dirty(orig_bh);	/* Expose it to the VM */
+				}
 			}
 			zj_journal_put_zjournal_head(orig_jh);
 		}
@@ -1358,6 +1368,7 @@ restart_loop:
 	spin_lock(&commit_transaction->t_mark_lock);
 	if (list_empty(&commit_transaction->t_check_mark_list)) {
 		commit_transaction->t_real_commit = 1;
+		commit_transaction->t_real_commit_state = 1;
 	}
 	spin_unlock(&commit_transaction->t_mark_lock);
 

@@ -3365,7 +3365,11 @@ static int __ext4mj_journalled_invalidatepage(struct page *page,
 					    unsigned int offset,
 					    unsigned int length)
 {
+	int core = smp_processor_id();
 	zjournal_t *journal = EXT4MJ_JOURNAL(page->mapping->host);
+	zjournal_t **journals = (zjournal_t **)journal->j_private_start;
+
+	journal = journals[core];
 
 	trace_ext4mj_journalled_invalidatepage(page, offset, length);
 

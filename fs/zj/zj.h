@@ -193,6 +193,7 @@ typedef struct commit_mark_s {
 } commit_mark_t;
 
 typedef struct commit_entry_s {
+    __u32		debug;
     __u16		state;
     __u16		core;
     __u32		tid;
@@ -736,13 +737,14 @@ struct ztransaction_s
 	 */
 	atomic_t		t_handle_count;
 
+	unsigned int t_real_commit;
+	unsigned int t_real_commit_state;
 	/*
 	 * This transaction is being forced and some process is
 	 * waiting for it to finish.
 	 */
 	unsigned int t_synchronous_commit:1;
-	unsigned int t_real_commit:1;
-	unsigned int t_real_committing:1;
+
 
 	/* Disk flush needs to be sent to fs partition [no locking] */
 	int			t_need_data_flush;

@@ -144,6 +144,7 @@ zj_get_transaction(zjournal_t *journal, ztransaction_t *transaction, struct list
 	transaction->t_start = jiffies;
 	transaction->t_requested = 0;
 	transaction->t_real_commit = 0;
+	transaction->t_real_commit_state = 0;
 	transaction->t_cp_buffer_num = 0;
 
 	return transaction;
@@ -1688,6 +1689,7 @@ int zj_journal_forget (handle_t *handle, struct buffer_head *bh)
 		return -EROFS;
 	journal = transaction->t_journal;
 
+	tforget_total++;
 	BUFFER_TRACE(bh, "entry");
 
 	jbd_lock_bh_state(bh);
@@ -1717,8 +1719,10 @@ int zj_journal_forget (handle_t *handle, struct buffer_head *bh)
 		jtransaction = jh->b_transaction;
 		jjournal = jtransaction->t_journal;
 
+		tforget1++;
 		read_lock(&jjournal->j_state_lock);
 		if (jtransaction->t_state > T_LOCKED) {
+			tforget6++;
 			// 이제 처음 commit에 진입해서 처리 중
 			// 기존 jbd2와 비교하자면, b_transaction은 있고
 			// committing인데 next는 없는 상태
@@ -1757,6 +1761,7 @@ int zj_journal_forget (handle_t *handle, struct buffer_head *bh)
 		 */
 
 		if (jh->b_cp_transaction) {
+			tforget2++;
 			spin_lock(&jjournal->j_list_lock);
 			__zj_zjournal_temp_unlink_buffer(jh);
 			jh->b_transaction = NULL;
@@ -1766,6 +1771,7 @@ int zj_journal_forget (handle_t *handle, struct buffer_head *bh)
 			__zj_journal_file_buffer(jh, transaction, BJ_Forget);
 			spin_unlock(&journal->j_list_lock);
 		} else {
+			tforget3++;
 			spin_lock(&jjournal->j_list_lock);
 			__zj_journal_unfile_buffer(jh);
 			if (!buffer_jbd(bh)) {
@@ -1779,7 +1785,9 @@ int zj_journal_forget (handle_t *handle, struct buffer_head *bh)
 	} else if (jh->b_cpcount) {
 		JBUFFER_TRACE(jh, "belongs to older transaction");
 
+		tforget4++;
 		if (jh->b_transaction) {
+			tforget5++;
 			jtransaction = jh->b_transaction;
 			jjournal = jtransaction->t_journal;
 
@@ -1980,19 +1988,21 @@ int zj_journal_stop(handle_t *handle)
 	while (!list_empty(&handle->h_transaction_list)) {
 		zjournal_t *jjournal;
 		commit_entry_t *tc = list_entry(handle->h_transaction_list.next, commit_entry_t, pos);
-		ztransaction_t *jtransaction = zj_get_target_transaction(journal, tc->core, tc->tid);
+		ztransaction_t *jtransaction;
+
+		list_del(&tc->pos);
+		spin_unlock(&handle->h_mark_lock);
+
+		jtransaction = zj_get_target_transaction(journal, tc->core, tc->tid);
 
 		if (!jtransaction) {
 			printk(KERN_ERR "cur(%d, %d) target(%d, %d)\n", journal->j_core_id, transaction->t_tid, tc->core, tc->tid);
 		}
 
-		list_del(&tc->pos);
-		spin_unlock(&handle->h_mark_lock);
-
 		zj_free_commit(tc);
 		jjournal = jtransaction->t_journal;
-
 		tid = jtransaction->t_tid;
+
 		if (atomic_dec_and_test(&jtransaction->t_updates)) {
 			wake_up(&jjournal->j_wait_updates);
 			if (jjournal->j_barrier_count)
