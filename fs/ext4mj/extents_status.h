@@ -6,6 +6,8 @@
  * Modified by
  *	Allison Henderson <achender@linux.vnet.ibm.com>
  *	Zheng Liu <wenqing.lz@taobao.com>
+ * Per-core journaling part by Jongseok Kim
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
  *
  */
 

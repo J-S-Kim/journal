@@ -1,9 +1,14 @@
+
+// SPDX-License-Identifier: GPL-2.0
 /*
  * ext4mj_zj.h
  *
  * Written by Stephen C. Tweedie <sct@redhat.com>, 1999
  *
  * Copyright 1998--1999 Red Hat corp --- All Rights Reserved
+ *
+ * Per-core journaling part by Jongseok Kim
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
  *
  * This file is part of the Linux kernel and is made available under
  * the terms of the GNU General Public License, version 2, or at your

@@ -5,6 +5,9 @@
  * This contains the new page_io functions for ext4mj
  *
  * Written by Theodore Ts'o, 2010.
+ *
+ * Per-core journaling part by Jongseok Kim
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
  */
 
 #include <linux/fs.h>

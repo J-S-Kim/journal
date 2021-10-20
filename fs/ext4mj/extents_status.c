@@ -7,6 +7,8 @@
  *	Allison Henderson <achender@linux.vnet.ibm.com>
  *	Hugh Dickins <hughd@google.com>
  *	Zheng Liu <wenqing.lz@taobao.com>
+ * Per-core journaling part by Jongseok Kim
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
  *
  * Ext4 extents status tree core functions.
  */

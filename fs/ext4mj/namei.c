@@ -23,6 +23,8 @@
  *	Christopher Li, 2002
  *  Hash Tree Directory indexing cleanup
  *	Theodore Ts'o, 2002
+ * Per-core journaling part by Jongseok Kim
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
  */
 
 #include <linux/fs.h>

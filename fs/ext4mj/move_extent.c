@@ -1,7 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2008,2009 NEC Software Tohoku, Ltd.
  * Written by Takashi Sato <t-sato@yk.jp.nec.com>
  *            Akira Fujita <a-fujita@rs.jp.nec.com>
+ * Per-core journaling part by Jongseok Kim
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2.1 of the GNU Lesser General Public License

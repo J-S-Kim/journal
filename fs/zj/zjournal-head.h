@@ -6,6 +6,9 @@
  *
  * 27 May 2001 Andrew Morton
  *	Created - pulled out of fs.h
+ *
+ * Per-core journaling part by Jongseok Kim
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
  */
 
 #ifndef ZJOURNAL_HEAD_H_INCLUDED

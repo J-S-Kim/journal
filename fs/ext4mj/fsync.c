@@ -15,6 +15,9 @@
  *  Big-endian to little-endian byte-swapping/bitmaps by
  *        David S. Miller (davem@caip.rutgers.edu), 1995
  *
+ * Per-core journaling part by Jongseok Kim
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
+ *
  *  Removed unnecessary code duplication for little endian machines
  *  and excessive __inline__s.
  *        Andi Kleen, 1997

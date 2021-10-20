@@ -1,7 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/fs/ext4mj/hash.c
  *
  * Copyright (C) 2002 by Theodore Ts'o
+ * Per-core journaling part by Jongseok Kim
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
  *
  * This file is released under the GPL v2.
  *

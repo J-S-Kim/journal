@@ -1,7 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2017 Oracle.  All Rights Reserved.
  *
  * Author: Darrick J. Wong <darrick.wong@oracle.com>
+ *
+ * Per-core journaling part by Jongseok Kim
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License

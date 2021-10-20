@@ -4,6 +4,8 @@
  *
  * Copyright (C) 2009
  * Theodore Ts'o (tytso@mit.edu)
+ * Per-core journaling part by Jongseok Kim
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
  *
  * Track which blocks in the filesystem are metadata blocks that
  * should never be used as data blocks by files or directories.

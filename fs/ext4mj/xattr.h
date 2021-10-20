@@ -5,6 +5,8 @@
   On-disk format of extended attributes for the ext4mj filesystem.
 
   (C) 2001 Andreas Gruenbacher, <a.gruenbacher@computer.org>
+ * Per-core journaling part by Jongseok Kim
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
 */
 
 #include <linux/xattr.h>

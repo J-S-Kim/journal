@@ -1,4 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
+/*
+ * Written based fs/ext4/mmp.c
+ * Per-core journaling part by Jongseok Kim
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
+*/
 #include <linux/fs.h>
 #include <linux/random.h>
 #include <linux/buffer_head.h>

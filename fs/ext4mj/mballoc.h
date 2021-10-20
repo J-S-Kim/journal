@@ -3,6 +3,8 @@
  *  fs/ext4mj/mballoc.h
  *
  *  Written by: Alex Tomas <alex@clusterfs.com>
+ * Per-core journaling part by Jongseok Kim
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
  *
  */
 #ifndef _EXT4MJ_MBALLOC_H
