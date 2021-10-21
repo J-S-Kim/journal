@@ -3,7 +3,7 @@
  * Written based fs/ext4/xattr_security.c
  * Handler for storing security labels as extended attributes.
  * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  */
 
 #include <linux/string.h>

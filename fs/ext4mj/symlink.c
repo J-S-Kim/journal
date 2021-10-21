@@ -10,7 +10,7 @@
  * Universite Pierre et Marie Curie (Paris VI)
  *
  * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  *
  *  from
  *

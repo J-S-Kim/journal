@@ -2,7 +2,7 @@
 /*
  * Written based fs/ext4/mmp.c
  * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
 */
 #include <linux/fs.h>
 #include <linux/random.h>

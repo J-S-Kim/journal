@@ -5,7 +5,7 @@
  * Copyright (C) 2002, Linus Torvalds.
  * Copyright (C) 2015, Google, Inc.
  * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  *
  * This was originally taken from fs/mpage.c
  *

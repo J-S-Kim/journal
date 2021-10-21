@@ -6,7 +6,7 @@
  * Remy Card (card@masi.ibp.fr)
  * Theodore Ts'o (tytso@mit.edu)
  * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  *
  */
 

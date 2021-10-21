@@ -4,7 +4,7 @@
  *
  * Copyright (C) 2002 by Theodore Ts'o
  * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  *
  * This file is released under the GPL v2.
  *

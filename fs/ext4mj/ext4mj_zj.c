@@ -5,7 +5,7 @@
  * Written based fs/ext4/ext4_jbd2.h
  *
  * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  */
 
 #include "ext4mj_zj.h"

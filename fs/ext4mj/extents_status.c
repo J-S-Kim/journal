@@ -8,7 +8,7 @@
  *	Hugh Dickins <hughd@google.com>
  *	Zheng Liu <wenqing.lz@taobao.com>
  * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  *
  * Ext4 extents status tree core functions.
  */

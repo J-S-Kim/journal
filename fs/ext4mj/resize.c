@@ -6,7 +6,7 @@
  *
  * Copyright (C) 2001, 2002 Andreas Dilger <adilger@clusterfs.com>
  * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  *
  * This could probably be made into a module, because it is not often in use.
  */

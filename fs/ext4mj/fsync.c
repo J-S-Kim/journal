@@ -16,7 +16,7 @@
  *        David S. Miller (davem@caip.rutgers.edu), 1995
  *
  * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Electronics and Telecommunications Research Institute
+ * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  *
  *  Removed unnecessary code duplication for little endian machines
  *  and excessive __inline__s.
