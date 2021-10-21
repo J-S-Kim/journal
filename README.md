@@ -2,6 +2,8 @@
 
 ---
 
+All added files comply with the license rules of the Linux kernel.
+
 ## Introduction
 
 ---
