@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
+// Per-core journaling part by Jongseok Kim
+// SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
 /*
  *  ext4mj.h
  *
@@ -7,8 +9,6 @@
  * Laboratoire MASI - Institut Blaise Pascal
  * Universite Pierre et Marie Curie (Paris VI)
  *
- * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  *  from
  *
  *  linux/include/linux/minix_fs.h

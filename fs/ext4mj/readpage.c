@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
+// Per-core journaling part by Jongseok Kim
+// SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
 /*
  * linux/fs/ext4mj/readpage.c
  *
  * Copyright (C) 2002, Linus Torvalds.
  * Copyright (C) 2015, Google, Inc.
- * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  *
  * This was originally taken from fs/mpage.c
  *

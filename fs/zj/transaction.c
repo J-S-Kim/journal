@@ -1,4 +1,6 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0+
+// Per-core journaling part by Jongseok Kim
+// SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
 /*
  * linux/fs/zj/transaction.c
  *
@@ -6,9 +8,6 @@
  *
  * Copyright 1998 Red Hat corp --- All Rights Reserved
  * 
- * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
- *
  * This file is part of the Linux kernel and is made available under
  * the terms of the GNU General Public License, version 2, or at your
  * option, any later version, incorporated herein by reference.

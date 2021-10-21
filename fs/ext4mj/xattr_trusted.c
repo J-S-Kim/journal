@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
+// Per-core journaling part by Jongseok Kim
+// SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
 /*
  * linux/fs/ext4mj/xattr_trusted.c
  * Handler for trusted extended attributes.
  *
  * Copyright (C) 2003 by Andreas Gruenbacher, <a.gruenbacher@computer.org>
- * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  */
 
 #include <linux/string.h>

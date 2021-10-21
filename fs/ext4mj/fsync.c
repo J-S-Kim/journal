@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
+// Per-core journaling part by Jongseok Kim
+// SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
 /*
  *  linux/fs/ext4mj/fsync.c
  *
@@ -14,9 +16,6 @@
  *
  *  Big-endian to little-endian byte-swapping/bitmaps by
  *        David S. Miller (davem@caip.rutgers.edu), 1995
- *
- * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  *
  *  Removed unnecessary code duplication for little endian machines
  *  and excessive __inline__s.

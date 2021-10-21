@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
+// Per-core journaling part by Jongseok Kim
+// SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
 /*
  *  linux/fs/ext4mj/block_validity.c
  *
  * Copyright (C) 2009
  * Theodore Ts'o (tytso@mit.edu)
- * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  *
  * Track which blocks in the filesystem are metadata blocks that
  * should never be used as data blocks by files or directories.

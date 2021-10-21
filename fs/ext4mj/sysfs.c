@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
+// Per-core journaling part by Jongseok Kim
+// SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
 /*
  *  linux/fs/ext4mj/sysfs.c
  *
  * Copyright (C) 1992, 1993, 1994, 1995
  * Remy Card (card@masi.ibp.fr)
  * Theodore Ts'o (tytso@mit.edu)
- * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  *
  */
 

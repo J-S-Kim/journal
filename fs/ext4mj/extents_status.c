@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
+// Per-core journaling part by Jongseok Kim
+// SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
 /*
  *  fs/ext4mj/extents_status.c
  *
@@ -7,8 +9,6 @@
  *	Allison Henderson <achender@linux.vnet.ibm.com>
  *	Hugh Dickins <hughd@google.com>
  *	Zheng Liu <wenqing.lz@taobao.com>
- * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  *
  * Ext4 extents status tree core functions.
  */

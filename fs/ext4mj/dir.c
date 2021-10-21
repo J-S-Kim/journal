@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
+// Per-core journaling part by Jongseok Kim
+// SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
 /*
  *  linux/fs/ext4mj/dir.c
  *
@@ -19,9 +21,6 @@
  *        David S. Miller (davem@caip.rutgers.edu), 1995
  *
  * Hash Tree Directory indexing (c) 2001  Daniel Phillips
- *
- * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  *
  */
 

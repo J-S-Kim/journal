@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
+// Per-core journaling part by Jongseok Kim
+// SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
 /*
  *  fs/ext4mj/extents_status.h
  *
@@ -6,8 +8,6 @@
  * Modified by
  *	Allison Henderson <achender@linux.vnet.ibm.com>
  *	Zheng Liu <wenqing.lz@taobao.com>
- * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  *
  */
 

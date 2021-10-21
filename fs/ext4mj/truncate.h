@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0 */
+// Per-core journaling part by Jongseok Kim
+// SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
 /*
- * Written based fs/ext4/truncate.h
- * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
+ * linux/fs/ext4mj/truncate.h
  *
  * Common inline functions needed for truncate support
  */

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
+// Per-core journaling part by Jongseok Kim
+// SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
 /*
  * Interface between ext4mj and JBD
  *
  * Written based fs/ext4/ext4_jbd2.h
  *
- * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  */
 
 #include "ext4mj_zj.h"

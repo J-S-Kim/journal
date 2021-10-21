@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
+// Per-core journaling part by Jongseok Kim
+// SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
 /*
  *  linux/fs/ext4mj/ialloc.c
  *
@@ -6,8 +8,6 @@
  * Remy Card (card@masi.ibp.fr)
  * Laboratoire MASI - Institut Blaise Pascal
  * Universite Pierre et Marie Curie (Paris VI)
- * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  *
  *  BSD ufs-inspired inode and directory allocation by
  *  Stephen Tweedie (sct@redhat.com), 1993

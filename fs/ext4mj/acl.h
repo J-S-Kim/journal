@@ -1,10 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0 */
+// Per-core journaling part by Jongseok Kim
+// SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
 /*
   File: fs/ext4mj/acl.h
 
   (C) 2001 Andreas Gruenbacher, <a.gruenbacher@computer.org>
- * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
 */
 
 #include <linux/posix_acl_xattr.h>

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
+// Per-core journaling part by Jongseok Kim
+// SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
 /*
  *  linux/fs/ext4mj/namei.c
  *
@@ -23,8 +25,6 @@
  *	Christopher Li, 2002
  *  Hash Tree Directory indexing cleanup
  *	Theodore Ts'o, 2002
- * Per-core journaling part by Jongseok Kim
- * SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
  */
 
 #include <linux/fs.h>
