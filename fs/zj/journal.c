@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0+
+// SPDX-License-Identifier: GPL-2.0-or-later
 // Per-core journaling part by Jongseok Kim
 // SPDX-FileCopyrightText: Copyright (c) 2021 Sungkyunkwan University
 /*
