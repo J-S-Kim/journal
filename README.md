@@ -39,6 +39,34 @@ sudo ./e2fsprog-zj/misc/tune2fs -o journal_data /dev/<block device>
 sudo mount -t ext4mj /dev/<block device> <mount point>
 ```
 
-## Publication
+## The guide to develop Z-Journal
 
 ---
+
+- Z-Journal mainly modified transaction.c, commit.c, and checkpoint.c of the fs/zj directory, and super.c, fsync.c, mballoc.c, ext4mj_zj.c, ext4mj_zj.h of the fs/ext4mj directory.
+
+### About journal modification
+- The contents of Journal Coherence Commit are reflected in commit.c and transaction.c.
+- The contents of Journal Coherence Checkpoint are reflected in checkpoint.c
+
+### About file system modification
+- Modification of super.c is necessary to recognize multiple journals, and ext4mj_zj files are necessary for good comfort with existing journaling APIs.
+- _fsync_ proceeds in a different way than before due to the per-core journaling. Therefore, the fsync.c file was modified.
+- The mballoc file includes modification of core-aware block group allocation (BGA).
+
+---
+
+## Evaluation
+
+### Environment
+![environment](https://user-images.githubusercontent.com/17569303/138211561-ebf1ccc2-fe70-4e04-a810-34a2d0fbb953.png)
+
+### FileBench results
+
+* Fileserver
+
+![fileserver](https://user-images.githubusercontent.com/17569303/138212007-a36f8654-611d-47c6-98b7-ddb5c28d6c2a.jpg)
+
+* Varmail
+
+![varmail](https://user-images.githubusercontent.com/17569303/138212016-7c1ba74d-aa91-4b9e-bfec-a8f800e85d94.jpg)
